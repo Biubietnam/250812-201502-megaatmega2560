@@ -1,0 +1,47 @@
+[
+    {
+        "tube": "tube1",
+        "type": "Paracetamol",
+        "amount": 120,
+        "time_to_take": [
+            {
+                "time": "08:00",
+                "dosage": "1 tablet"
+            },
+            {
+                "time": "12:00",
+                "dosage": "1 tablet"
+            }
+        ]
+    },
+    {
+        "tube": "tube2",
+        "type": "Vitamin C",
+        "amount": 60,
+        "time_to_take": [
+            {
+                "time": "09:00",
+                "dosage": "2 tablets"
+            },
+            {
+                "time": "21:00",
+                "dosage": "1 tablet"
+            }
+        ]
+    },
+    {
+        "tube": "tube3",
+        "type": "Ibuprofen",
+        "amount": 90,
+        "time_to_take": [
+            {
+                "time": "07:30",
+                "dosage": "1 tablet"
+            },
+            {
+                "time": "18:00",
+                "dosage": "1 tablet"
+            }
+        ]
+    }
+]
