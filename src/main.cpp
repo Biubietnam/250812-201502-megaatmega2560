@@ -747,7 +747,7 @@ void setup()
   servo1.write(91);
   servo2.write(91);
   servo3.write(90);
-  servo4.write(90);0
+  servo4.write(90);
 
   pinMode(MOTOR_1, OUTPUT);
   pinMode(MOTOR_2, OUTPUT);
