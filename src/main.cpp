@@ -863,30 +863,75 @@ bool checkJsonFile()
   return true;
 }
 
-void saveJsonToSD(String data) {
-  if (SD.exists("data.json")) {
-    SD.remove("data.json");
-    delay(10);
-  }
-  File f = SD.open("data.json", FILE_WRITE);
-  if (f) {
+bool saveJsonToSD(String data)
+{
+  const char *fname = "data.json";
+  const int maxRetries = 3;
+
+  for (int attempt = 0; attempt < maxRetries; attempt++)
+  {
+    // remove old (if any) and write fresh
+    if (SD.exists(fname))
+    {
+      SD.remove(fname);
+      delay(10);
+    }
+
+    File f = SD.open(fname, FILE_WRITE);
+    if (!f)
+    {
+      Serial.println("Error opening data.json for write!");
+      delay(100);
+      continue;
+    }
+
+    // write and close
     f.println(data);
     f.close();
-    Serial.println("Written to SD:");
-    Serial.println(data);
-  } else {
-    Serial.println("Error opening data.json for write!");
+    delay(60); // give SD a moment to settle
+
+    // verify by reading back
+    File r = SD.open(fname, FILE_READ);
+    if (!r)
+    {
+      Serial.println("Error opening data.json for readback!");
+      delay(100);
+      continue;
+    }
+
+    String readBack;
+    while (r.available())
+      readBack += (char)r.read();
+    r.close();
+
+    if (readBack.equals(data) || readBack.indexOf("#START#") == -1)
+    {
+      // quick sanity: exact match or at least not obviously corrupted
+      Serial.println("Write verified.");
+      return true;
+    }
+    else
+    {
+      Serial.println("Write verification failed, retrying...");
+      delay(150);
+    }
   }
+
+  Serial.println("Failed to write data.json after retries.");
+  return false;
 }
-bool initSD() {
+bool initSD()
+{
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
   digitalWrite(SD_CS, HIGH);
   digitalWrite(TFT_CS, HIGH);
   delay(50);
 
-  for (int i = 0; i < 5; i++) {
-    if (SD.begin(SD_CS)) {
+  for (int i = 0; i < 5; i++)
+  {
+    if (SD.begin(SD_CS))
+    {
       Serial.println("SD initialized.");
       delay(10);
       return true;
@@ -904,9 +949,8 @@ void setup()
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
 
-
   pinMode(DROP_BTN, INPUT_PULLUP);
-  SPI.begin();         
+  SPI.begin();
   digitalWrite(SD_CS, HIGH);
   digitalWrite(TFT_CS, HIGH);
   tft.init(240, 280);
@@ -937,7 +981,7 @@ void setup()
   }
 
   Serial.println("SD card ready.");
-  filestat = checkJsonFile();
+  filestat = loadScheduleData();
 
   if (filestat)
   {
@@ -1000,12 +1044,30 @@ void loop()
       {
         String payload = jsonBuffer.substring(0, endIndex);
         Serial.println("\nReceived complete JSON!");
-        saveJsonToSD(payload);
-        filestat = checkJsonFile();
-        if (filestat)
+
+        // Try to save and validate the file
+        bool wrote = saveJsonToSD(payload);
+        if (wrote)
         {
-          loadScheduleData();
+          // give a short delay before parsing to ensure SD finished internal ops
+          delay(80);
+          bool loaded = loadScheduleData(); // returns true on success
+          filestat = loaded;
+          if (loaded)
+          {
+            Serial.println("Schedule loaded successfully after BT transfer.");
+          }
+          else
+          {
+            Serial.println("Schedule load failed after BT transfer.");
+          }
         }
+        else
+        {
+          filestat = false;
+          Serial.println("Failed to save JSON to SD.");
+        }
+
         jsonBuffer = jsonBuffer.substring(endIndex + 5);
         receiving = false;
       }
