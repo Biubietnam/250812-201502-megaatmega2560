@@ -16,6 +16,7 @@
 #define MOTOR_3 26
 #define MOTOR_4 28
 #define DROP_BTN 30
+#define FSR_PIN A4
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 RTC_DS3231 rtc;
@@ -38,6 +39,25 @@ unsigned long lastMenuUpdate = 0;
 bool showNotification = false;
 String notificationMessage = "";
 unsigned long notificationStartTime = 0;
+
+//  Added motor state tracking for toggle functionality
+bool motorStates[4] = {false, false, false, false}; // Track motor on/off states
+
+//  Added tube mapping structure
+struct TubeMapping {
+  String tubeName;
+  int servoIndex;
+  int motorPin;
+  Servo* servo;
+};
+
+//  Define tube-to-servo/motor mapping
+TubeMapping tubeMappings[4] = {
+  {"tube1", 0, MOTOR_1, &servo1},
+  {"tube2", 1, MOTOR_2, &servo2},
+  {"tube3", 2, MOTOR_3, &servo3},
+  {"tube4", 3, MOTOR_4, &servo4}
+};
 
 // Schedule data structure
 struct MedicationTime
@@ -66,27 +86,156 @@ struct GroupedMedication
 GroupedMedication groupedSchedules[10];
 int groupedCount = 0;
 
-void openServo(Servo &servo, int standbyPos = 91, int openPos = 135)
+void openServo(Servo &servo, int standbyPos = 91, int openPos = 45)
 {
+  Serial.println("Opening servo");
   servo.write(openPos);
-  delay(300);
+  delay(600);
   servo.write(standbyPos);
 }
 
-void closeServo(Servo &servo, int standbyPos = 91, int closePos = 45)
+void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135)
 {
+  Serial.println("Closing servo");
   servo.write(closePos);
-  delay(300);
+  delay(600);
   servo.write(standbyPos);
 }
 
-// ================= NPN Motor Trigger =================
-void triggerMotor(int motorPin, unsigned long durationMs)
+//  Modified triggerMotor to be a toggle function instead of time-based
+void triggerMotor(int motorPin, bool turnOn)
 {
-  digitalWrite(motorPin, HIGH); // Turn motor ON via NPN transistor
-  delay(durationMs);
-  digitalWrite(motorPin, LOW); // Turn motor OFF
+  if (turnOn) {
+    Serial.print("Starting motor on pin ");
+    Serial.println(motorPin);
+    digitalWrite(motorPin, HIGH); // Turn motor ON via NPN transistor
+  } else {
+    Serial.print("Stopping motor on pin ");
+    Serial.println(motorPin);
+    digitalWrite(motorPin, LOW); // Turn motor OFF
+  }
 }
+
+//  Added function to get tube mapping by tube name
+TubeMapping* getTubeMapping(String tubeName) {
+  for (int i = 0; i < 4; i++) {
+    if (tubeMappings[i].tubeName == tubeName) {
+      return &tubeMappings[i];
+    }
+  }
+  return nullptr;
+}
+
+//  Added dispensing sequence function
+void dispenseFromTube(String tubeName) {
+  TubeMapping* mapping = getTubeMapping(tubeName);
+  if (mapping == nullptr) {
+    Serial.print("Unknown tube: ");
+    Serial.println(tubeName);
+    return;
+  }
+  
+  Serial.print("Dispensing from ");
+  Serial.println(tubeName);
+  
+  // Read initial weight
+  float initialWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
+  Serial.print("Initial weight: ");
+  Serial.print(initialWeight, 1);
+  Serial.println(" g");
+  
+  // Open servo first
+  openServo(*mapping->servo);
+  delay(500);
+  
+  // Start motor
+  triggerMotor(mapping->motorPin, true);
+  motorStates[mapping->servoIndex] = true;
+  
+  // Monitor weight increase
+  unsigned long startTime = millis();
+  bool dispensingComplete = false;
+  
+  while (!dispensingComplete && (millis() - startTime < 10000)) { // 10 second timeout
+    float currentWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
+    float weightIncrease = currentWeight - initialWeight;
+    
+    Serial.print("Current weight: ");
+    Serial.print(currentWeight, 1);
+    Serial.print(" g, Increase: ");
+    Serial.print(weightIncrease, 1);
+    Serial.println(" g");
+    
+    // Check if weight increased by 5 grams
+    if (weightIncrease >= 5.0) {
+      dispensingComplete = true;
+      Serial.println("Target weight reached!");
+    }
+    
+    delay(100);
+  }
+  
+  // Stop motor
+  triggerMotor(mapping->motorPin, false);
+  motorStates[mapping->servoIndex] = false;
+  
+  // Close servo
+  delay(500);
+  closeServo(*mapping->servo);
+  
+  Serial.print("Dispensing complete for ");
+  Serial.println(tubeName);
+}
+
+//  Added function to handle dispensing sequence for multiple tubes
+void handleDispensing() {
+  Serial.println("DROP button pressed - starting dispensing sequence");
+  
+  // Find current medication group
+  String currentTime = "";
+  if (rtctime.hour() < 10) currentTime += "0";
+  currentTime += String(rtctime.hour());
+  currentTime += ":";
+  if (rtctime.minute() < 10) currentTime += "0";
+  currentTime += String(rtctime.minute());
+  
+  GroupedMedication* currentGroup = nullptr;
+  for (int i = 0; i < groupedCount; i++) {
+    if (groupedSchedules[i].time == currentTime) {
+      currentGroup = &groupedSchedules[i];
+      break;
+    }
+  }
+  
+  if (currentGroup == nullptr) {
+    Serial.println("No medications scheduled for current time");
+    return;
+  }
+  
+  // Dispense from each tube sequentially
+  for (int i = 0; i < currentGroup->count; i++) {
+    Serial.print("Dispensing medication ");
+    Serial.print(i + 1);
+    Serial.print(" of ");
+    Serial.print(currentGroup->count);
+    Serial.print(": ");
+    Serial.println(currentGroup->medications[i]);
+    
+    dispenseFromTube(currentGroup->tubes[i]);
+    
+    // Delay between tubes if multiple
+    if (i < currentGroup->count - 1) {
+      Serial.println("Waiting before next tube...");
+      delay(2000);
+    }
+  }
+  
+  Serial.println("Dispensing sequence complete");
+  
+  // Dismiss notification after successful dispensing
+  showNotification = false;
+}
+
 // ---------------- Animation Functions ----------------
 void drawLoadingBar(int progress, int x, int y, int width, int height)
 {
@@ -561,14 +710,18 @@ void drawNotification()
     lineY += 12;
   }
 
+  //  Updated auto-dismiss to 5 minutes and added button instruction
   tft.setTextSize(1);
+  tft.setCursor(15, 80 + notifHeight - 25);
+  tft.print("Press DROP button to dispense");
+  
   tft.setCursor(15, 80 + notifHeight - 15);
   tft.print("Auto-dismiss in ");
-  tft.print(30 - (millis() - notificationStartTime) / 1000);
+  tft.print(300 - (millis() - notificationStartTime) / 1000);
   tft.print("s");
 
-  // Auto-dismiss after 30 seconds
-  if (millis() - notificationStartTime > 30000)
+  //  Auto-dismiss after 5 minutes (300 seconds)
+  if (millis() - notificationStartTime > 300000)
   {
     showNotification = false;
   }
@@ -734,6 +887,9 @@ void setup()
 
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
+  
+  //  Added DROP_BTN with INPUT_PULLUP configuration
+  pinMode(DROP_BTN, INPUT_PULLUP);
 
   tft.init(240, 280);
 
@@ -774,12 +930,30 @@ void setup()
   {
     Serial.println("RTC not found!");
   }
+  rtc.adjust(DateTime(2025, 8, 15, 17, 59, 0));
   showMainMenu();
 }
 
 void loop()
 {
+  int fsrValue = analogRead(FSR_PIN);
+  float grams = (fsrValue / 1023.0) * 1000.0;
+
+  Serial.print("Weight: ");
+  Serial.print(grams, 1); // one decimal place
+  Serial.println(" g");
+
+  delay(100);
   rtctime = rtc.now();
+
+  //  Added button handling during notification
+  if (showNotification && digitalRead(DROP_BTN) == LOW) {
+    delay(50); // Debounce
+    if (digitalRead(DROP_BTN) == LOW) {
+      handleDispensing();
+      delay(500); // Prevent multiple triggers
+    }
+  }
 
   static unsigned long lastUpdate = 0;
   const unsigned long refreshInterval = 5000;

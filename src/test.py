@@ -14,7 +14,7 @@ class ResponsiveAutoPillDispenser:
     def __init__(self):
         # Initialize main window with responsive settings
         self.app = ttk.Window(themename="flatly")
-        self.app.title("? Auto Pill Dispenser Control")
+        self.app.title("💊 Auto Pill Dispenser Control")
         self.app.geometry("900x800")  # Larger initial size
         self.app.minsize(800, 600)    # Minimum size
         self.app.resizable(True, True)  # Allow resizing
@@ -117,7 +117,7 @@ class ResponsiveAutoPillDispenser:
         # Title
         self.title_label = ttk.Label(
             header_frame,
-            text="? AUTO PILL DISPENSER",
+            text="💊 AUTO PILL DISPENSER",
             font=("Segoe UI", 24, "bold"),
             bootstyle="primary"
         )
@@ -126,7 +126,7 @@ class ResponsiveAutoPillDispenser:
         # Subtitle
         subtitle = ttk.Label(
             header_frame,
-            text="? Smart Medication Management System",
+            text="🏥 Smart Medication Management System",
             font=("Segoe UI", 12),
             bootstyle="info"
         )
@@ -163,7 +163,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive mode selection"""
         mode_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Upload Method",
+            text="📁 Upload Method",
             padding=15,
             bootstyle="info"
         )
@@ -175,7 +175,7 @@ class ResponsiveAutoPillDispenser:
         
         self.json_btn = ttk.Button(
             button_frame,
-            text="? JSON Configuration",
+            text="📄 JSON Configuration",
             bootstyle="primary",
             command=lambda: self.switch_mode("json")
         )
@@ -183,7 +183,7 @@ class ResponsiveAutoPillDispenser:
         
         self.qr_btn = ttk.Button(
             button_frame,
-            text="? QR Code",
+            text="📱 QR Code",
             bootstyle="primary-outline",
             command=lambda: self.switch_mode("qr")
         )
@@ -202,7 +202,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive connection section"""
         conn_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Device Connection",
+            text="🔌 Device Connection",
             padding=15,
             bootstyle="success"
         )
@@ -220,7 +220,7 @@ class ResponsiveAutoPillDispenser:
         port_frame = ttk.Frame(conn_frame)
         port_frame.pack(fill="x")
         
-        ttk.Label(port_frame, text="? COM Port:", font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Label(port_frame, text="🔗 COM Port:", font=("Segoe UI", 11, "bold")).pack(side="left")
         
         self.com_menu = ttk.Combobox(
             port_frame,
@@ -233,7 +233,7 @@ class ResponsiveAutoPillDispenser:
         
         self.refresh_btn = ttk.Button(
             port_frame,
-            text="? Scan",
+            text="🔍 Scan",
             bootstyle="info-outline",
             command=self.refresh_ports
         )
@@ -245,7 +245,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive upload section"""
         upload_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Medication Data Upload",
+            text="📤 Medication Data Upload",
             padding=15,
             bootstyle="warning"
         )
@@ -254,7 +254,7 @@ class ResponsiveAutoPillDispenser:
         # Upload button
         self.file_btn = ttk.Button(
             upload_frame,
-            text="? Choose JSON File",
+            text="📂 Choose JSON File",
             bootstyle="warning-outline",
             command=self.choose_file
         )
@@ -284,7 +284,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive and properly scrollable preview section"""
         preview_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Medication Schedule Preview",
+            text="👁️ Medication Schedule Preview",
             padding=10,
             bootstyle="info"
         )
@@ -335,7 +335,7 @@ class ResponsiveAutoPillDispenser:
             
         empty_label = ttk.Label(
             self.preview_content,
-            text="? No medication data to display\nUpload a JSON file to see medication schedule",
+            text="📋 No medication data to display\nUpload a JSON file to see medication schedule",
             font=("Segoe UI", 12),
             bootstyle="secondary",
             justify="center"
@@ -346,7 +346,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive status section"""
         status_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Device Status",
+            text="📊 Device Status",
             padding=15,
             bootstyle="secondary"
         )
@@ -363,17 +363,25 @@ class ResponsiveAutoPillDispenser:
         # Status label
         self.status_label = ttk.Label(
             status_frame,
-            text="? Ready for configuration",
+            text="✅ Ready for configuration",
             font=("Segoe UI", 11, "bold"),
             bootstyle="success"
         )
         self.status_label.pack()
         
+        self.chunk_progress_label = ttk.Label(
+            status_frame,
+            text="",
+            font=("Segoe UI", 9),
+            bootstyle="info"
+        )
+        self.chunk_progress_label.pack(pady=(5, 0))
+        
     def create_responsive_submit(self):
         """Create responsive submit section"""
         submit_frame = ttk.LabelFrame(
             self.content_frame,
-            text="? Send Configuration",
+            text="🚀 Send Configuration",
             padding=20,
             bootstyle="danger"
         )
@@ -385,16 +393,16 @@ class ResponsiveAutoPillDispenser:
         
         ttk.Label(
             checklist_frame,
-            text="? Pre-Submit Checklist:",
+            text="📋 Pre-Submit Checklist:",
             font=("Segoe UI", 12, "bold"),
             bootstyle="info"
         ).pack(anchor="w")
         
         checklist_items = [
-            "? Device connected via COM port",
-            "? Medication data loaded and verified",
-            "?? Dispenser is empty and ready",
-            "? Safety protocols acknowledged"
+            "🔌 Device connected via COM port",
+            "📄 Medication data loaded and verified",
+            "🏺 Dispenser is empty and ready",
+            "⚠️ Safety protocols acknowledged"
         ]
         
         for item in checklist_items:
@@ -408,7 +416,7 @@ class ResponsiveAutoPillDispenser:
         # Submit button
         self.submit_btn = ttk.Button(
             submit_frame,
-            text="? SUBMIT TO DISPENSER",
+            text="📡 SUBMIT TO DISPENSER",
             bootstyle="danger",
             command=self.submit_data
         )
@@ -417,7 +425,7 @@ class ResponsiveAutoPillDispenser:
         # Warning
         ttk.Label(
             submit_frame,
-            text="?? WARNING: This will configure the pill dispenser with the loaded medication schedule.",
+            text="⚠️ WARNING: This will configure the pill dispenser with the loaded medication schedule.",
             font=("Segoe UI", 10, "bold"),
             bootstyle="warning"
         ).pack()
@@ -426,7 +434,7 @@ class ResponsiveAutoPillDispenser:
         """Create clear/reset section"""
         clear_frame = ttk.LabelFrame(
             self.content_frame,
-            text="?? Reset & Clear",
+            text="🧹 Reset & Clear",
             padding=15,
             bootstyle="secondary"
         )
@@ -437,7 +445,7 @@ class ResponsiveAutoPillDispenser:
         
         self.clear_data_btn = ttk.Button(
             button_frame,
-            text="?? Clear Data",
+            text="🗑️ Clear Data",
             bootstyle="secondary-outline",
             command=self.clear_data
         )
@@ -445,7 +453,7 @@ class ResponsiveAutoPillDispenser:
         
         self.reset_app_btn = ttk.Button(
             button_frame,
-            text="? Reset App",
+            text="🔄 Reset App",
             bootstyle="secondary-outline",
             command=self.reset_app
         )
@@ -459,24 +467,24 @@ class ResponsiveAutoPillDispenser:
             self.json_btn.configure(bootstyle="primary")
             self.qr_btn.configure(bootstyle="primary-outline")
             self.mode_desc.configure(text="Upload medication schedule via JSON configuration file")
-            self.file_btn.configure(text="? Choose JSON File")
+            self.file_btn.configure(text="📂 Choose JSON File")
         else:
             self.json_btn.configure(bootstyle="primary-outline")
             self.qr_btn.configure(bootstyle="primary")
             self.mode_desc.configure(text="Upload QR code containing medication data")
-            self.file_btn.configure(text="? Upload QR Code")
+            self.file_btn.configure(text="📱 Upload QR Code")
             
         self.show_empty_preview()
         
     def refresh_ports(self):
         """Refresh COM ports with animation"""
-        self.refresh_btn.configure(text="? Scanning...", state="disabled")
+        self.refresh_btn.configure(text="🔄 Scanning...", state="disabled")
         
         def refresh_task():
             time.sleep(0.5)
             self.refresh_com_ports()
             self.app.after(0, lambda: [
-                self.refresh_btn.configure(text="? Scan", state="normal"),
+                self.refresh_btn.configure(text="🔍 Scan", state="normal"),
                 self.show_notification("Device scan completed!", "success")
             ])
             
@@ -530,7 +538,7 @@ class ResponsiveAutoPillDispenser:
             total_schedules = sum(len(med['time_to_take']) for med in data)
             
             # Update UI
-            self.file_label.configure(text=f"? {filename}")
+            self.file_label.configure(text=f"📄 {filename}")
             self.summary_label.configure(text=f"{total_medications} meds | {total_tubes} tubes | {total_schedules} schedules")
             
             # Display preview
@@ -556,7 +564,7 @@ class ResponsiveAutoPillDispenser:
             # Medication card
             med_frame = ttk.LabelFrame(
                 self.preview_content,
-                text=f"? {med.get('type', 'Unknown')} - {med.get('tube', 'Unknown Tube')}",
+                text=f"💊 {med.get('type', 'Unknown')} - {med.get('tube', 'Unknown Tube')}",
                 padding=15,
                 bootstyle="primary" if i % 2 == 0 else "success"
             )
@@ -568,7 +576,7 @@ class ResponsiveAutoPillDispenser:
             
             ttk.Label(
                 info_frame,
-                text=f"? Amount: {med.get('amount', 0)} tablets",
+                text=f"📦 Amount: {med.get('amount', 0)} tablets",
                 font=("Segoe UI", 10, "bold"),
                 bootstyle="info"
             ).pack(side="left")
@@ -580,7 +588,7 @@ class ResponsiveAutoPillDispenser:
             
             ttk.Label(
                 info_frame,
-                text=f"? Daily: {total_daily} tablets",
+                text=f"📅 Daily: {total_daily} tablets",
                 font=("Segoe UI", 10),
                 bootstyle="secondary"
             ).pack(side="right")
@@ -588,7 +596,7 @@ class ResponsiveAutoPillDispenser:
             # Schedule
             ttk.Label(
                 med_frame,
-                text="? Schedule:",
+                text="⏰ Schedule:",
                 font=("Segoe UI", 10, "bold")
             ).pack(anchor="w", pady=(0, 5))
             
@@ -598,7 +606,7 @@ class ResponsiveAutoPillDispenser:
                 
                 ttk.Label(
                     schedule_frame,
-                    text=f"? {schedule.get('time', 'Unknown')} - {schedule.get('dosage', 'Unknown dosage')}",
+                    text=f"🕐 {schedule.get('time', 'Unknown')} - {schedule.get('dosage', 'Unknown dosage')}",
                     font=("Segoe UI", 9),
                     bootstyle="secondary"
                 ).pack(side="left")
@@ -628,9 +636,9 @@ class ResponsiveAutoPillDispenser:
             
         # Start submission
         self.is_sending = True
-        self.submit_btn.configure(text="? SUBMITTING...", state="disabled")
+        self.submit_btn.configure(text="📡 SUBMITTING...", state="disabled")
         self.progress.start()
-        self.status_label.configure(text="? Submitting...", bootstyle="warning")
+        self.status_label.configure(text="📡 Submitting...", bootstyle="warning")
         
         def submit_task():
             try:
@@ -641,36 +649,56 @@ class ResponsiveAutoPillDispenser:
                     
                 # Simulate submission steps
                 steps = [
-                    "? Validating data...",
-                    f"? Connecting to {port}...",
-                    "? Transmitting...",
-                    "?? Configuring...",
-                    "? Complete!"
+                    "🔍 Validating data...",
+                    f"🔌 Connecting to {port}...",
+                    "📡 Transmitting...",
+                    "⚙️ Configuring...",
+                    "✅ Complete!"
                 ]
                 
                 for step in steps:
                     time.sleep(0.8)
                     self.app.after(0, lambda s=step: self.status_label.configure(text=s))
                 
-                # Send via serial
                 CHUNK_SIZE = 32
+                CHUNK_DELAY = 0.15  # Increased delay from 0.05 to 0.15 seconds for Arduino compatibility
                 data_bytes = data.encode('utf-8')
+                total_chunks = (len(data_bytes) + CHUNK_SIZE - 1) // CHUNK_SIZE
+                
                 with serial.Serial(port, 9600, timeout=5) as ser:
+                    time.sleep(2)  # Give Arduino time to initialize
+                    
                     for i in range(0, len(data_bytes), CHUNK_SIZE):
-                        ser.write(data_bytes[i:i+CHUNK_SIZE])
+                        chunk_num = (i // CHUNK_SIZE) + 1
+                        chunk_data = data_bytes[i:i+CHUNK_SIZE]
+                        
+                        progress_text = f"📦 Sending chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
+                        self.app.after(0, lambda t=progress_text: self.chunk_progress_label.configure(text=t))
+                        
+                        # Send chunk
+                        ser.write(chunk_data)
                         ser.flush()
-                        time.sleep(0.05)
+                        
+                        time.sleep(CHUNK_DELAY)
+                        
+                        # ack = ser.read(1)
+                        # if ack != b'A':  # Assuming Arduino sends 'A' for acknowledgment
+                        #     raise Exception(f"Arduino did not acknowledge chunk {chunk_num}")
+                    
+                    time.sleep(0.5)
                     
                 self.app.after(0, lambda: [
                     self.show_notification("Successfully submitted to dispenser!", "success"),
-                    self.status_label.configure(text="? Submission successful", bootstyle="success"),
+                    self.status_label.configure(text="✅ Submission successful", bootstyle="success"),
+                    self.chunk_progress_label.configure(text="📦 All chunks sent successfully"),
                     messagebox.showinfo("Success", f"Data successfully sent to {port}!")
                 ])
                 
             except Exception as e:
                 self.app.after(0, lambda: [
                     self.show_notification(f"Submission failed: {str(e)}", "error"),
-                    self.status_label.configure(text="? Submission failed", bootstyle="danger"),
+                    self.status_label.configure(text="❌ Submission failed", bootstyle="danger"),
+                    self.chunk_progress_label.configure(text="❌ Transmission interrupted"),
                     messagebox.showerror("Error", f"Failed to submit: {str(e)}")
                 ])
             finally:
@@ -682,7 +710,8 @@ class ResponsiveAutoPillDispenser:
         """Reset submit button"""
         self.is_sending = False
         self.progress.stop()
-        self.submit_btn.configure(text="? SUBMIT TO DISPENSER", state="normal")
+        self.submit_btn.configure(text="📡 SUBMIT TO DISPENSER", state="normal")
+        self.chunk_progress_label.configure(text="")
         
     def clear_data(self):
         """Clear loaded data"""
@@ -700,7 +729,8 @@ class ResponsiveAutoPillDispenser:
         self.com_var.set("")
         self.upload_mode.set("json")
         self.switch_mode("json")
-        self.status_label.configure(text="? Ready for configuration", bootstyle="success")
+        self.status_label.configure(text="✅ Ready for configuration", bootstyle="success")
+        self.chunk_progress_label.configure(text="")
         self.show_notification("Application reset", "info")
         
     def show_notification(self, message, type_="info"):
@@ -714,7 +744,7 @@ class ResponsiveAutoPillDispenser:
         
         notification = ttk.Label(
             self.content_frame,
-            text=f"{'?' if type_=='success' else '?' if type_=='error' else '??'} {message}",
+            text=f"{'✅' if type_=='success' else '❌' if type_=='error' else 'ℹ️'} {message}",
             font=("Segoe UI", 10, "bold"),
             bootstyle=colors.get(type_, "info")
         )
