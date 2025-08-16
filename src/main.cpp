@@ -44,20 +44,20 @@ unsigned long notificationStartTime = 0;
 bool motorStates[4] = {false, false, false, false}; // Track motor on/off states
 
 //  Added tube mapping structure
-struct TubeMapping {
+struct TubeMapping
+{
   String tubeName;
   int servoIndex;
   int motorPin;
-  Servo* servo;
+  Servo *servo;
 };
 
 //  Define tube-to-servo/motor mapping
 TubeMapping tubeMappings[4] = {
-  {"tube1", 0, MOTOR_1, &servo1},
-  {"tube2", 1, MOTOR_2, &servo2},
-  {"tube3", 2, MOTOR_3, &servo3},
-  {"tube4", 3, MOTOR_4, &servo4}
-};
+    {"tube1", 0, MOTOR_1, &servo1},
+    {"tube2", 1, MOTOR_2, &servo2},
+    {"tube3", 2, MOTOR_3, &servo3},
+    {"tube4", 3, MOTOR_4, &servo4}};
 
 // Schedule data structure
 struct MedicationTime
@@ -105,11 +105,14 @@ void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135)
 //  Modified triggerMotor to be a toggle function instead of time-based
 void triggerMotor(int motorPin, bool turnOn)
 {
-  if (turnOn) {
+  if (turnOn)
+  {
     Serial.print("Starting motor on pin ");
     Serial.println(motorPin);
     digitalWrite(motorPin, HIGH); // Turn motor ON via NPN transistor
-  } else {
+  }
+  else
+  {
     Serial.print("Stopping motor on pin ");
     Serial.println(motorPin);
     digitalWrite(motorPin, LOW); // Turn motor OFF
@@ -117,9 +120,12 @@ void triggerMotor(int motorPin, bool turnOn)
 }
 
 //  Added function to get tube mapping by tube name
-TubeMapping* getTubeMapping(String tubeName) {
-  for (int i = 0; i < 4; i++) {
-    if (tubeMappings[i].tubeName == tubeName) {
+TubeMapping *getTubeMapping(String tubeName)
+{
+  for (int i = 0; i < 4; i++)
+  {
+    if (tubeMappings[i].tubeName == tubeName)
+    {
       return &tubeMappings[i];
     }
   }
@@ -127,111 +133,123 @@ TubeMapping* getTubeMapping(String tubeName) {
 }
 
 //  Added dispensing sequence function
-void dispenseFromTube(String tubeName) {
-  TubeMapping* mapping = getTubeMapping(tubeName);
-  if (mapping == nullptr) {
+void dispenseFromTube(String tubeName)
+{
+  TubeMapping *mapping = getTubeMapping(tubeName);
+  if (mapping == nullptr)
+  {
     Serial.print("Unknown tube: ");
     Serial.println(tubeName);
     return;
   }
-  
+
   Serial.print("Dispensing from ");
   Serial.println(tubeName);
-  
+
   // Read initial weight
   float initialWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
   Serial.print("Initial weight: ");
   Serial.print(initialWeight, 1);
   Serial.println(" g");
-  
+
   // Open servo first
   openServo(*mapping->servo);
   delay(500);
-  
+
   // Start motor
   triggerMotor(mapping->motorPin, true);
   motorStates[mapping->servoIndex] = true;
-  
+
   // Monitor weight increase
   unsigned long startTime = millis();
   bool dispensingComplete = false;
-  
-  while (!dispensingComplete && (millis() - startTime < 10000)) { // 10 second timeout
+
+  while (!dispensingComplete && (millis() - startTime < 10000))
+  { // 10 second timeout
     float currentWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
     float weightIncrease = currentWeight - initialWeight;
-    
+
     Serial.print("Current weight: ");
     Serial.print(currentWeight, 1);
     Serial.print(" g, Increase: ");
     Serial.print(weightIncrease, 1);
     Serial.println(" g");
-    
+
     // Check if weight increased by 5 grams
-    if (weightIncrease >= 5.0) {
+    if (weightIncrease >= 5.0)
+    {
       dispensingComplete = true;
       Serial.println("Target weight reached!");
     }
-    
+
     delay(100);
   }
-  
+
   // Stop motor
   triggerMotor(mapping->motorPin, false);
   motorStates[mapping->servoIndex] = false;
-  
+
   // Close servo
   delay(500);
   closeServo(*mapping->servo);
-  
+
   Serial.print("Dispensing complete for ");
   Serial.println(tubeName);
 }
 
 //  Added function to handle dispensing sequence for multiple tubes
-void handleDispensing() {
+void handleDispensing()
+{
   Serial.println("DROP button pressed - starting dispensing sequence");
-  
+
   // Find current medication group
   String currentTime = "";
-  if (rtctime.hour() < 10) currentTime += "0";
+  if (rtctime.hour() < 10)
+    currentTime += "0";
   currentTime += String(rtctime.hour());
   currentTime += ":";
-  if (rtctime.minute() < 10) currentTime += "0";
+  if (rtctime.minute() < 10)
+    currentTime += "0";
   currentTime += String(rtctime.minute());
-  
-  GroupedMedication* currentGroup = nullptr;
-  for (int i = 0; i < groupedCount; i++) {
-    if (groupedSchedules[i].time == currentTime) {
+
+  GroupedMedication *currentGroup = nullptr;
+  for (int i = 0; i < groupedCount; i++)
+  {
+    if (groupedSchedules[i].time == currentTime)
+    {
       currentGroup = &groupedSchedules[i];
       break;
     }
   }
-  
-  if (currentGroup == nullptr) {
+
+  if (currentGroup == nullptr)
+  {
     Serial.println("No medications scheduled for current time");
     return;
   }
-  
+
   // Dispense from each tube sequentially
-  for (int i = 0; i < currentGroup->count; i++) {
+  for (int i = 0; i < currentGroup->count; i++)
+  {
     Serial.print("Dispensing medication ");
     Serial.print(i + 1);
     Serial.print(" of ");
     Serial.print(currentGroup->count);
     Serial.print(": ");
     Serial.println(currentGroup->medications[i]);
-    
+
     dispenseFromTube(currentGroup->tubes[i]);
-    
+
     // Delay between tubes if multiple
-    if (i < currentGroup->count - 1) {
+    if (i < currentGroup->count - 1)
+    {
       Serial.println("Waiting before next tube...");
       delay(2000);
     }
   }
-  
+
   Serial.println("Dispensing sequence complete");
-  
+
   // Dismiss notification after successful dispensing
   showNotification = false;
 }
@@ -714,7 +732,7 @@ void drawNotification()
   tft.setTextSize(1);
   tft.setCursor(15, 80 + notifHeight - 25);
   tft.print("Press DROP button to dispense");
-  
+
   tft.setCursor(15, 80 + notifHeight - 15);
   tft.print("Auto-dismiss in ");
   tft.print(300 - (millis() - notificationStartTime) / 1000);
@@ -845,33 +863,32 @@ bool checkJsonFile()
   return true;
 }
 
-void saveJsonToSD(String data)
-{
-  digitalWrite(SD_CS, LOW);
-  file = SD.open("data.json", FILE_WRITE);
-  if (file)
-  {
-    file.println(data);
-    file.close();
+void saveJsonToSD(String data) {
+  if (SD.exists("data.json")) {
+    SD.remove("data.json");
+    delay(10);
+  }
+  File f = SD.open("data.json", FILE_WRITE);
+  if (f) {
+    f.println(data);
+    f.close();
     Serial.println("Written to SD:");
     Serial.println(data);
+  } else {
+    Serial.println("Error opening data.json for write!");
   }
-  else
-  {
-    Serial.println("Error opening SD file!");
-  }
-  digitalWrite(SD_CS, HIGH);
 }
+bool initSD() {
+  pinMode(SD_CS, OUTPUT);
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+  digitalWrite(TFT_CS, HIGH);
+  delay(50);
 
-bool initSD()
-{
-  for (int i = 0; i < 5; i++)
-  { // Try up to 5 times
-    digitalWrite(SD_CS, LOW);
-    digitalWrite(TFT_CS, HIGH);
-    if (SD.begin(SD_CS))
-    {
+  for (int i = 0; i < 5; i++) {
+    if (SD.begin(SD_CS)) {
       Serial.println("SD initialized.");
+      delay(10);
       return true;
     }
     Serial.println("SD init failed, retrying...");
@@ -879,7 +896,6 @@ bool initSD()
   }
   return false;
 }
-
 void setup()
 {
   Serial.begin(9600);
@@ -887,10 +903,12 @@ void setup()
 
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
-  
-  //  Added DROP_BTN with INPUT_PULLUP configuration
-  pinMode(DROP_BTN, INPUT_PULLUP);
 
+
+  pinMode(DROP_BTN, INPUT_PULLUP);
+  SPI.begin();         
+  digitalWrite(SD_CS, HIGH);
+  digitalWrite(TFT_CS, HIGH);
   tft.init(240, 280);
 
   animatedIntro();
@@ -938,18 +956,15 @@ void loop()
 {
   int fsrValue = analogRead(FSR_PIN);
   float grams = (fsrValue / 1023.0) * 1000.0;
-
-  Serial.print("Weight: ");
-  Serial.print(grams, 1); // one decimal place
-  Serial.println(" g");
-
   delay(100);
   rtctime = rtc.now();
 
   //  Added button handling during notification
-  if (showNotification && digitalRead(DROP_BTN) == LOW) {
+  if (showNotification && digitalRead(DROP_BTN) == LOW)
+  {
     delay(50); // Debounce
-    if (digitalRead(DROP_BTN) == LOW) {
+    if (digitalRead(DROP_BTN) == LOW)
+    {
       handleDispensing();
       delay(500); // Prevent multiple triggers
     }

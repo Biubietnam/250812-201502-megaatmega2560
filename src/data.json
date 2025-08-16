@@ -1,11 +1,11 @@
 [
     {
         "tube": "tube1",
-        "type": "Paracetamol",
+        "type": "Paracetamol12",
         "amount": 120,
         "time_to_take": [
             {
-                "time": "08:00",
+                "time": "18:00",
                 "dosage": "1 tablet"
             },
             {
