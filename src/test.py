@@ -660,7 +660,7 @@ class ResponsiveAutoPillDispenser:
                     time.sleep(0.8)
                     self.app.after(0, lambda s=step: self.status_label.configure(text=s))
                 
-                CHUNK_SIZE = 32
+                CHUNK_SIZE = 64
                 CHUNK_DELAY = 0.15  # Increased delay from 0.05 to 0.15 seconds for Arduino compatibility
                 data_bytes = data.encode('utf-8')
                 total_chunks = (len(data_bytes) + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -680,13 +680,13 @@ class ResponsiveAutoPillDispenser:
                         ser.flush()
                         
                         time.sleep(CHUNK_DELAY)
-                        
-                        # ack = ser.read(1)
-                        # if ack != b'A':  # Assuming Arduino sends 'A' for acknowledgment
-                        #     raise Exception(f"Arduino did not acknowledge chunk {chunk_num}")
+                        ack = ser.read(1)
+                        if ack != b'A':  # Assuming Arduino sends 'A' for acknowledgment
+                            raise Exception(f"Arduino did not acknowledge chunk {chunk_num}")
                     
                     time.sleep(0.5)
-                    
+                    ser.flush()
+                    time.sleep(2) 
                 self.app.after(0, lambda: [
                     self.show_notification("Successfully submitted to dispenser!", "success"),
                     self.status_label.configure(text="✅ Submission successful", bootstyle="success"),
