@@ -22,29 +22,40 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 RTC_DS3231 rtc;
 SdFat SD;
 File file;
+Servo servo1
+;
 
-String jsonBuffer = "";
+Servo servo2
+;
+
+Servo servo3
+;
+
+Servo servo4
+;
+
+
 bool filestat = false;
 bool receiving = false;
-DateTime rtctime;
+unsigned long receiveStartTime = 0;
+unsigned long lastByteTime = 0;
+File streamingFile; // For streaming writes
+bool streamingActive = false;
 
-Servo servo1;
-Servo servo2;
-Servo servo3;
-Servo servo4;
-
+String notificationMessage = "";
+unsigned long notificationStartTime = 0;
+volatile bool sdBusy = false;
+DateTime rtctime
+;
 // Menu state variables
 int currentMenuPage = 0;
 unsigned long lastMenuUpdate = 0;
 bool showNotification = false;
-String notificationMessage = "";
-unsigned long notificationStartTime = 0;
-volatile bool sdBusy = false;
 
-//  Added motor state tracking for toggle functionality
+// Added motor state tracking for toggle functionality
 bool motorStates[4] = {false, false, false, false}; // Track motor on/off states
 
-//  Added tube mapping structure
+// Added tube mapping structure
 struct TubeMapping
 {
   String tubeName;
@@ -53,7 +64,7 @@ struct TubeMapping
   Servo *servo;
 };
 
-//  Define tube-to-servo/motor mapping
+// Define tube-to-servo/motor mapping
 TubeMapping tubeMappings[4] = {
     {"tube1", 0, MOTOR_1, &servo1},
     {"tube2", 1, MOTOR_2, &servo2},
@@ -73,7 +84,7 @@ struct MedicationTime
 MedicationTime schedules[10]; // Max 10 schedule entries
 int scheduleCount = 0;
 
-//  Added structure for grouping medications by time
+// Added structure for grouping medications by time
 struct GroupedMedication
 {
   String time;
@@ -103,7 +114,7 @@ void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135)
   servo.write(standbyPos);
 }
 
-//  Modified triggerMotor to be a toggle function instead of time-based
+// Modified triggerMotor to be a toggle function instead of time-based
 void triggerMotor(int motorPin, bool turnOn)
 {
   if (turnOn)
@@ -120,7 +131,7 @@ void triggerMotor(int motorPin, bool turnOn)
   }
 }
 
-//  Added function to get tube mapping by tube name
+// Added function to get tube mapping by tube name
 TubeMapping *getTubeMapping(String tubeName)
 {
   for (int i = 0; i < 4; i++)
@@ -133,7 +144,7 @@ TubeMapping *getTubeMapping(String tubeName)
   return nullptr;
 }
 
-//  Added dispensing sequence function
+// Added dispensing sequence function
 void dispenseFromTube(String tubeName)
 {
   TubeMapping *mapping = getTubeMapping(tubeName);
@@ -198,7 +209,7 @@ void dispenseFromTube(String tubeName)
   Serial.println(tubeName);
 }
 
-//  Added function to handle dispensing sequence for multiple tubes
+// Added function to handle dispensing sequence for multiple tubes
 void handleDispensing()
 {
   Serial.println("DROP button pressed - starting dispensing sequence");
@@ -292,6 +303,22 @@ void drawSpinner(int x, int y, int radius, int angle)
     tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
   }
 }
+int findMatchingBrace(const String &str, int start)
+{
+  int braceCount = 0;
+  for (int i = start; i < str.length(); i++)
+  {
+    if (str[i] == '{')
+      braceCount++;
+    else if (str[i] == '}')
+    {
+      braceCount--;
+      if (braceCount == 0)
+        return i;
+    }
+  }
+  return -1;
+}
 
 void animatedIntro()
 {
@@ -382,6 +409,7 @@ void animatedIntro()
   tft.println(initText);
   delay(1000);
 }
+
 void groupMedicationsByTime()
 {
   groupedCount = 0;
@@ -422,117 +450,160 @@ void groupMedicationsByTime()
     }
   }
 }
+
 // ---------------- JSON Parsing Functions ----------------
-bool loadScheduleData()
+bool startStreamingSave()
 {
+  const char *tmpName = "data.tmp";
+
   if (sdBusy)
   {
-    Serial.println("loadScheduleData: SD busy, abort");
+    Serial.println("startStreamingSave: SD busy, abort.");
     return false;
   }
   sdBusy = true;
 
-  File f = SD.open("data.json", FILE_READ);
-  if (!f)
+  // Make sure other SPI device (TFT) releases CS
+  digitalWrite(TFT_CS, HIGH);
+  delay(5);
+
+  // Ensure SD initialized
+  if (!SD.begin(SD_CS))
   {
-    Serial.println("Cannot find data.json");
+    Serial.println("startStreamingSave: SD.begin() failed.");
     sdBusy = false;
     return false;
   }
 
-  size_t fileSize = f.size();
-  Serial.print("loadScheduleData: fileSize = ");
-  Serial.println(fileSize);
-  if (fileSize == 0)
+  // remove stale temp
+  if (SD.exists(tmpName))
   {
-    Serial.println("loadScheduleData: file empty");
-    f.close();
+    SD.remove(tmpName);
+    delay(100);
+  }
+
+  // Open temp file for streaming writes
+  streamingFile = SD.open(tmpName, O_WRITE | O_CREAT | O_TRUNC);
+  if (!streamingFile)
+  {
+    Serial.println("startStreamingSave: ERROR opening temp for write!");
     sdBusy = false;
     return false;
   }
 
-  // debug: show first/last bytes for truncation check
-  f.seek(0);
-  String firstPart;
-  for (size_t i = 0; i < min((size_t)64, fileSize) && f.available(); ++i)
-    firstPart += (char)f.read();
-  Serial.print("FIRST 64: ");
-  Serial.println(firstPart);
-
-  String lastPart;
-  if (fileSize > 64)
-    f.seek(fileSize - 64);
-  else
-    f.seek(0);
-  while (f.available())
-    lastPart += (char)f.read();
-  Serial.print("LAST 64: ");
-  Serial.println(lastPart);
-
-  // rewind for parsing
-  f.seek(0);
-
-  // choose capacity proportional to file size
-  size_t capacity = fileSize * 4;
-  if (capacity < 4096)
-    capacity = 4096; // minimum safe
-  if (capacity > 32000)
-    capacity = 32000;
-
-  DynamicJsonDocument doc(capacity);
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
-
-  if (err)
-  {
-    Serial.print("JSON parsing error: ");
-    Serial.println(err.c_str());
-    if (err == DeserializationError::IncompleteInput)
-    {
-      Serial.println(" -> IncompleteInput: file likely truncated or read during write.");
-    }
-    else if (err == DeserializationError::NoMemory)
-    {
-      Serial.println(" -> NoMemory: increase capacity (fileSize or cap).");
-      Serial.print(" tried capacity: ");
-      Serial.println(capacity);
-    }
-    sdBusy = false;
-    return false;
-  }
-
-  // Parse schedule into arrays
-  scheduleCount = 0;
-  JsonArray medications = doc.as<JsonArray>();
-  for (JsonObject med : medications)
-  {
-    String tube = med["tube"] | String("");
-    String type = med["type"] | String("");
-    int amount = med["amount"] | 0;
-    JsonArray times = med["time_to_take"].as<JsonArray>();
-    for (JsonObject timeObj : times)
-    {
-      if (scheduleCount < 10)
-      {
-        schedules[scheduleCount].tube = tube;
-        schedules[scheduleCount].medication = type;
-        schedules[scheduleCount].amount = amount;
-        schedules[scheduleCount].time = timeObj["time"].as<String>();
-        schedules[scheduleCount].dosage = timeObj["dosage"].as<String>();
-        scheduleCount++;
-      }
-    }
-  }
-
-  groupMedicationsByTime();
-  Serial.print("Loaded ");
-  Serial.print(scheduleCount);
-  Serial.println(" medication schedules");
-
-  sdBusy = false;
+  streamingActive = true;
+  Serial.println("Started streaming save to SD");
   return true;
 }
-//  New function to group medications by time
+
+bool writeStreamingChunk(const String &chunk)
+{
+  if (!streamingActive || !streamingFile)
+  {
+    return false;
+  }
+
+  size_t written = streamingFile.print(chunk);
+  streamingFile.flush(); // Ensure data is written immediately
+
+  if (written != chunk.length())
+  {
+    Serial.println("writeStreamingChunk: ERROR incomplete write!");
+    return false;
+  }
+
+  return true;
+}
+
+bool finishStreamingSave()
+{
+  if (!streamingActive)
+  {
+    return false;
+  }
+
+  const char *tmpName = "data.tmp";
+  const char *finalName = "data.json";
+
+  streamingFile.sync();
+  streamingFile.close();
+  streamingActive = false;
+
+  delay(50);
+
+  // Try to remove final (retry few times)
+  if (SD.exists(finalName))
+  {
+    bool removed = false;
+    for (int attempt = 0; attempt < 6; ++attempt)
+    {
+      delay(40);
+      removed = SD.remove(finalName);
+      Serial.print("finishStreamingSave: remove final attempt ");
+      Serial.print(attempt);
+      Serial.print(" -> ");
+      Serial.println(removed ? "ok" : "fail");
+      if (removed)
+        break;
+    }
+  }
+
+  // Try rename
+  bool renamed = SD.rename(tmpName, finalName);
+  Serial.print("finishStreamingSave: rename -> ");
+  Serial.println(renamed ? "ok" : "fail");
+
+  if (!renamed)
+  {
+    Serial.println("finishStreamingSave: fallback copy starting...");
+    // Fallback: stream copy from temp to final
+    File r = SD.open(tmpName, FILE_READ);
+    if (!r)
+    {
+      Serial.println("finishStreamingSave: fallback: cannot open temp for read.");
+      sdBusy = false;
+      return false;
+    }
+
+    if (SD.exists(finalName))
+    {
+      SD.remove(finalName);
+      delay(10);
+    }
+
+    File f2 = SD.open(finalName, O_WRITE | O_CREAT | O_TRUNC);
+    if (!f2)
+    {
+      Serial.println("finishStreamingSave: fallback: cannot open final for write.");
+      r.close();
+      sdBusy = false;
+      return false;
+    }
+
+    // Stream copy in small chunks
+    char buffer[64];
+    while (r.available())
+    {
+      int bytesRead = r.readBytes(buffer, sizeof(buffer));
+      f2.write((const uint8_t *)buffer, bytesRead);
+    }
+
+    f2.sync();
+    f2.close();
+    r.close();
+    Serial.println("finishStreamingSave: fallback copy complete");
+
+    // Try remove temp (best-effort)
+    if (SD.exists(tmpName))
+    {
+      SD.remove(tmpName);
+    }
+  }
+
+  sdBusy = false;
+  Serial.println("Streaming save completed successfully");
+  return true;
+}
 
 // Convert time string to minutes since midnight
 int timeToMinutes(String timeStr)
@@ -546,7 +617,7 @@ int timeToMinutes(String timeStr)
   return hours * 60 + minutes;
 }
 
-//  Modified to work with grouped medications
+// Modified to work with grouped medications
 int findNextMedication()
 {
   int currentMinutes = rtctime.hour() * 60 + rtctime.minute();
@@ -573,7 +644,7 @@ int findNextMedication()
   return closestIndex;
 }
 
-//  Modified to handle multiple medications at same time
+// Modified to handle multiple medications at same time
 bool checkMedicationTime()
 {
   String currentTime = "";
@@ -609,6 +680,121 @@ bool checkMedicationTime()
   }
   return false;
 }
+
+bool loadScheduleData()
+{
+  if (sdBusy)
+  {
+    Serial.println("loadScheduleData: SD busy, abort");
+    return false;
+  }
+  sdBusy = true;
+
+  File f = SD.open("data.json", FILE_READ);
+  if (!f)
+  {
+    Serial.println("Cannot find data.json");
+    sdBusy = false;
+    return false;
+  }
+
+  size_t fileSize = f.size();
+  Serial.print("loadScheduleData: fileSize = ");
+  Serial.println(fileSize);
+  if (fileSize == 0)
+  {
+    Serial.println("loadScheduleData: file empty");
+    f.close();
+    sdBusy = false;
+    return false;
+  }
+
+  // Parse schedule into arrays using streaming approach
+  scheduleCount = 0;
+
+  // Use smaller buffer for streaming JSON parsing
+  const size_t bufferSize = 512;
+  DynamicJsonDocument doc(bufferSize);
+
+  // Read and parse in chunks
+  String currentMedication = "";
+  String currentTube = "";
+  int currentAmount = 0;
+  bool inMedArray = false;
+  bool inTimeArray = false;
+
+  char buffer[128];
+  String jsonChunk = "";
+
+  while (f.available())
+  {
+    int bytesRead = f.readBytes(buffer, sizeof(buffer) - 1);
+    buffer[bytesRead] = '\0';
+    jsonChunk += String(buffer);
+
+    // Process complete JSON objects as we find them
+    int objStart = jsonChunk.indexOf('{');
+    while (objStart != -1)
+    {
+      int objEnd = findMatchingBrace(jsonChunk, objStart);
+      if (objEnd != -1)
+      {
+        String jsonObj = jsonChunk.substring(objStart, objEnd + 1);
+
+        // Parse this medication object
+        DynamicJsonDocument medDoc(256);
+        DeserializationError err = deserializeJson(medDoc, jsonObj);
+
+        if (!err)
+        {
+          String tube = medDoc["tube"] | String("");
+          String type = medDoc["type"] | String("");
+          int amount = medDoc["amount"] | 0;
+          JsonArray times = medDoc["time_to_take"].as<JsonArray>();
+
+          for (JsonObject timeObj : times)
+          {
+            if (scheduleCount < 10)
+            {
+              schedules[scheduleCount].tube = tube;
+              schedules[scheduleCount].medication = type;
+              schedules[scheduleCount].amount = amount;
+              schedules[scheduleCount].time = timeObj["time"].as<String>();
+              schedules[scheduleCount].dosage = timeObj["dosage"].as<String>();
+              scheduleCount++;
+            }
+          }
+        }
+
+        // Remove processed object from chunk
+        jsonChunk = jsonChunk.substring(objEnd + 1);
+        objStart = jsonChunk.indexOf('{');
+      }
+      else
+      {
+        break; // Need more data
+      }
+    }
+
+    // Keep only partial data for next iteration
+    if (jsonChunk.length() > 256)
+    {
+      jsonChunk = jsonChunk.substring(jsonChunk.length() - 128);
+    }
+  }
+
+  f.close();
+  sdBusy = false;
+
+  groupMedicationsByTime();
+  Serial.print("Loaded ");
+  Serial.print(scheduleCount);
+  Serial.println(" medication schedules");
+
+  return scheduleCount > 0;
+}
+
+// Helper function to find matching brace
 
 // ---------------- Display Functions ----------------
 void drawHeader()
@@ -650,7 +836,7 @@ void drawHeader()
   tft.fillRect(311, 10, 3, 8, ST77XX_WHITE);
 }
 
-//  Modified to display grouped medications
+// Modified to display grouped medications
 void drawGroupedMedicationCard(int x, int y, int width, int height, GroupedMedication group, bool isNext = false)
 {
   // Card background
@@ -723,7 +909,7 @@ void drawGroupedMedicationCard(int x, int y, int width, int height, GroupedMedic
   }
 }
 
-//  Enhanced notification display for multiple medications
+// Enhanced notification display for multiple medications
 void drawNotification()
 {
   if (!showNotification)
@@ -778,7 +964,7 @@ void drawNotification()
     lineY += 12;
   }
 
-  //  Updated auto-dismiss to 5 minutes and added button instruction
+  // Updated auto-dismiss to 5 minutes and added button instruction
   tft.setTextSize(1);
   tft.setCursor(15, 80 + notifHeight - 25);
   tft.print("Press DROP button to dispense");
@@ -788,7 +974,7 @@ void drawNotification()
   tft.print(300 - (millis() - notificationStartTime) / 1000);
   tft.print("s");
 
-  //  Auto-dismiss after 5 minutes (300 seconds)
+  // Auto-dismiss after 5 minutes (300 seconds)
   if (millis() - notificationStartTime > 300000)
   {
     showNotification = false;
@@ -883,7 +1069,6 @@ void showMainMenu()
   tft.print("Auto-refresh: 5s");
 }
 
-// ... existing code ...
 
 bool checkJsonFile()
 {
@@ -913,169 +1098,11 @@ bool checkJsonFile()
   return true;
 }
 
-bool saveJsonToSD(const String &data)
-{
-  const char *tmpName = "data.tmp";
-  const char *finalName = "data.json";
-
-  if (data.length() == 0)
-  {
-    Serial.println("saveJsonToSD: empty payload, abort.");
-    return false;
-  }
-
-  if (sdBusy)
-  {
-    Serial.println("saveJsonToSD: SD busy, abort.");
-    return false;
-  }
-  sdBusy = true;
-
-  // Make sure other SPI device (TFT) releases CS
-  digitalWrite(TFT_CS, HIGH);
-  delay(5);
-
-  // Ensure SD initialized
-  if (!SD.begin(SD_CS))
-  {
-    Serial.println("saveJsonToSD: SD.begin() failed.");
-    sdBusy = false;
-    return false;
-  }
-
-  // remove stale temp
-  if (SD.exists(tmpName))
-  {
-    SD.remove(tmpName);
-    delay(100);
-  }
-
-  // Write to temp file
-  File f = SD.open(tmpName, O_WRITE | O_CREAT | O_TRUNC);
-  if (!f)
-  {
-    Serial.println("saveJsonToSD: ERROR opening temp for write!");
-    sdBusy = false;
-    return false;
-  }
-
-  size_t written = f.print(data);
-  f.sync();
-  f.close();
-  
-  delay(50);
-  if (written != data.length())
-  {
-    Serial.println("saveJsonToSD: ERROR incomplete write!");
-    sdBusy = false;
-    return false;
-  }
-  Serial.print("saveJsonToSD: bytes written to temp = ");
-  Serial.println(written);
-
-  // Try to remove final (retry few times)
-  if (SD.exists(finalName))
-  {
-    bool removed = false;
-    for (int attempt = 0; attempt < 6; ++attempt)
-    {
-      delay(40);
-      removed = SD.remove(finalName);
-      Serial.print("saveJsonToSD: remove final attempt ");
-      Serial.print(attempt);
-      Serial.print(" -> ");
-      Serial.println(removed ? "ok" : "fail");
-      if (removed)
-        break;
-    }
-    if (!removed)
-    {
-      Serial.println("saveJsonToSD: WARNING: couldn't remove existing final file.");
-      // continue to fallback copy if rename fails
-    }
-  }
-
-  // Try rename
-  bool renamed = SD.rename(tmpName, finalName);
-  Serial.print("saveJsonToSD: rename -> ");
-  Serial.println(renamed ? "ok" : "fail");
-
-  if (!renamed)
-  {
-    // Fallback: copy contents from temp to final
-    Serial.println("saveJsonToSD: fallback copy starting...");
-    File r = SD.open(tmpName, FILE_READ);
-    if (!r)
-    {
-      Serial.println("saveJsonToSD: fallback: cannot open temp for read.");
-      sdBusy = false;
-      return false;
-    }
-    String buff;
-    while (r.available())
-      buff += (char)r.read();
-    r.close();
-
-    // attempt to remove final again
-    if (SD.exists(finalName))
-    {
-      SD.remove(finalName);
-      delay(10);
-    }
-
-    File f2 = SD.open(finalName, O_WRITE | O_CREAT | O_TRUNC);
-    if (!f2)
-    {
-      Serial.println("saveJsonToSD: fallback: cannot open final for write.");
-      sdBusy = false;
-      return false;
-    }
-    size_t w2 = f2.write((const uint8_t *)buff.c_str(), buff.length());
-    f2.sync();
-    f2.close();
-    Serial.print("saveJsonToSD: fallback wrote bytes = ");
-    Serial.println(w2);
-
-    // Try remove temp (best-effort)
-    if (SD.exists(tmpName))
-    {
-      SD.remove(tmpName);
-    }
-  }
-  else
-  {
-    Serial.println("saveJsonToSD: rename OK (temp -> final).");
-  }
-
-  // Verify final file content quickly
-  delay(20);
-  File verify = SD.open(finalName, FILE_READ);
-  if (!verify)
-  {
-    Serial.println("saveJsonToSD: ERROR opening final for verification!");
-    sdBusy = false;
-    return false;
-  }
-  String readBack;
-  while (verify.available())
-    readBack += (char)verify.read();
-  verify.close();
-
-  Serial.print("saveJsonToSD: final length = ");
-  Serial.println(readBack.length());
-  readBack.trim();
-  bool ok = (readBack.equals(data) || (readBack.length() > 0 && (readBack[0] == '{' || readBack[0] == '[')));
-  Serial.print("saveJsonToSD: verified = ");
-  Serial.println(ok ? "true" : "false");
-
-  sdBusy = false;
-  return ok;
-}
 bool initSD()
 {
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
-  digitalWrite(SD_CS, HIGH);
+  digitalWrite(SD_CS, LOW);
   digitalWrite(TFT_CS, HIGH);
   delay(50);
 
@@ -1092,6 +1119,7 @@ bool initSD()
   }
   return false;
 }
+
 void setup()
 {
   Serial.begin(9600);
@@ -1142,13 +1170,8 @@ void setup()
   showMainMenu();
 }
 
-static unsigned long lastByteTime = 0; // when last byte arrived
-static unsigned long receiveStartTime = 0;
-
 void loop()
 {
-  int fsrValue = analogRead(FSR_PIN);
-  float grams = (fsrValue / 1023.0) * 1000.0;
   delay(100);
   rtctime = rtc.now();
 
@@ -1167,40 +1190,59 @@ void loop()
   const unsigned long refreshInterval = 5000;
 
   static int byteCounter = 0;
+  static String tempChunk = ""; // Small temporary buffer for processing
+
   while (Serial1.available())
   {
     char c = Serial1.read();
     Serial.print(c);
-    jsonBuffer += c;
+    tempChunk += c;
     byteCounter++;
 
     lastByteTime = millis();
+
     if (!receiving)
     {
-      int startIndex = jsonBuffer.indexOf("#START#");
+      int startIndex = tempChunk.indexOf("#START#");
       if (startIndex != -1)
       {
         receiving = true;
-        receiveStartTime = millis(); // mark start of receiving
-        jsonBuffer = jsonBuffer.substring(startIndex + 7);
-        jsonBuffer.trim();
+        receiveStartTime = millis();
+        tempChunk = tempChunk.substring(startIndex + 7);
+
+        // Start streaming save
+        if (!startStreamingSave())
+        {
+          Serial.println("Failed to start streaming save");
+          receiving = false;
+          tempChunk = "";
+          continue;
+        }
+
+        Serial.println("Started receiving JSON data...");
       }
-      else if (jsonBuffer.length() > 256)
+      else if (tempChunk.length() > 64)
       {
-        jsonBuffer = "";
+        tempChunk = tempChunk.substring(tempChunk.length() - 32); // Keep only recent data
       }
     }
     else
     {
-      int endIndex = jsonBuffer.indexOf("#END#");
+      int endIndex = tempChunk.indexOf("#END#");
       if (endIndex != -1)
       {
-        String payload = jsonBuffer.substring(0, endIndex);
-        payload.trim();
+        // Write final chunk (without #END#)
+        String finalChunk = tempChunk.substring(0, endIndex);
+        if (finalChunk.length() > 0)
+        {
+          writeStreamingChunk(finalChunk);
+        }
+
+        // Finish streaming save
+        bool saved = finishStreamingSave();
         Serial.println("\nReceived complete JSON!");
 
-        bool wrote = saveJsonToSD(payload);
-        if (wrote)
+        if (saved)
         {
           delay(1000);
           bool loaded = loadScheduleData();
@@ -1214,42 +1256,73 @@ void loop()
           Serial.println("Failed to save JSON to SD.");
         }
 
-        jsonBuffer = jsonBuffer.substring(endIndex + 5);
-        jsonBuffer.trim();
+        tempChunk = tempChunk.substring(endIndex + 5);
         receiving = false;
         Serial.println("Complete");
       }
+      else
+      {
+        // Write chunk to SD when we have enough data
+        if (tempChunk.length() >= 64)
+        {
+          String chunkToWrite = tempChunk.substring(0, 32);
+          writeStreamingChunk(chunkToWrite);
+          tempChunk = tempChunk.substring(32);
+        }
+      }
     }
 
-    if (byteCounter >= 64)
+    if (byteCounter >= 32)
     {
       Serial1.write('A');
       byteCounter = 0;
     }
 
-    if (jsonBuffer.length() > 4096)
+    // Prevent memory overflow
+    if (tempChunk.length() > 128)
     {
-      Serial.println("Warning: buffer too large, clearing!");
-      jsonBuffer = "";
-      receiving = false;
+      if (receiving)
+      {
+        // Write excess to SD
+        String excess = tempChunk.substring(0, 64);
+        writeStreamingChunk(excess);
+        tempChunk = tempChunk.substring(64);
+      }
+      else
+      {
+        Serial.println("Warning: temp buffer too large, clearing!");
+        tempChunk = "";
+      }
     }
   }
 
   // ---- Timeout checks ----
   if (receiving)
   {
-    // If no new byte in 300 ms
+    // If no new byte in 5 seconds
     if (millis() - lastByteTime > 5000)
     {
-      Serial.println("Timeout: no new data, clearing buffer.");
-      jsonBuffer = "";
+      Serial.println("Timeout: no new data, aborting streaming save.");
+      if (streamingActive)
+      {
+        streamingFile.close();
+        streamingActive = false;
+        sdBusy = false;
+      }
+      tempChunk = "";
       receiving = false;
     }
-    // If total > 5 seconds
+    // If total > 20 seconds
     else if (millis() - receiveStartTime > 20000)
     {
-      Serial.println("Timeout: transmission too long, clearing buffer.");
-      jsonBuffer = "";
+      Serial.println("Timeout: transmission too long, aborting streaming save.");
+      if (streamingActive)
+      {
+        streamingFile.close();
+        streamingActive = false;
+        sdBusy = false;
+      }
+      tempChunk = "";
       receiving = false;
     }
   }
@@ -1259,4 +1332,5 @@ void loop()
     showMainMenu();
     lastUpdate = millis();
   }
+
 }
