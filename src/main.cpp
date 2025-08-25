@@ -22,18 +22,13 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 RTC_DS3231 rtc;
 SdFat SD;
 File file;
-Servo servo1
-;
+Servo servo1;
 
-Servo servo2
-;
+Servo servo2;
 
-Servo servo3
-;
+Servo servo3;
 
-Servo servo4
-;
-
+Servo servo4;
 
 bool filestat = false;
 bool receiving = false;
@@ -45,8 +40,7 @@ bool streamingActive = false;
 String notificationMessage = "";
 unsigned long notificationStartTime = 0;
 volatile bool sdBusy = false;
-DateTime rtctime
-;
+DateTime rtctime;
 // Menu state variables
 int currentMenuPage = 0;
 unsigned long lastMenuUpdate = 0;
@@ -143,7 +137,11 @@ TubeMapping *getTubeMapping(String tubeName)
   }
   return nullptr;
 }
-
+inline bool acquireSD() {
+  digitalWrite(TFT_CS, HIGH);   // hard-deselect TFT
+  delayMicroseconds(5);
+  return SD.begin(SD_CS);       // (re)setup SD SPI each time
+}
 // Added dispensing sequence function
 void dispenseFromTube(String tubeName)
 {
@@ -466,6 +464,8 @@ bool startStreamingSave()
   // Make sure other SPI device (TFT) releases CS
   digitalWrite(TFT_CS, HIGH);
   delay(5);
+  if (!acquireSD()) { Serial.println("SD.begin failed"); sdBusy = false; return false; }
+
 
   // Ensure SD initialized
   if (!SD.begin(SD_CS))
@@ -602,6 +602,7 @@ bool finishStreamingSave()
 
   sdBusy = false;
   Serial.println("Streaming save completed successfully");
+  delay(500);
   return true;
 }
 
@@ -689,7 +690,9 @@ bool loadScheduleData()
     return false;
   }
   sdBusy = true;
-
+  digitalWrite(TFT_CS, HIGH);
+  delayMicroseconds(5);
+  if (!acquireSD()) { Serial.println("loadScheduleData: SD.begin failed"); sdBusy = false; return false; }
   File f = SD.open("data.json", FILE_READ);
   if (!f)
   {
@@ -1069,7 +1072,6 @@ void showMainMenu()
   tft.print("Auto-refresh: 5s");
 }
 
-
 bool checkJsonFile()
 {
   File f = SD.open("data.json", FILE_READ);
@@ -1206,6 +1208,25 @@ void loop()
       int startIndex = tempChunk.indexOf("#START#");
       if (startIndex != -1)
       {
+        tft.fillScreen(ST77XX_BLACK);
+        tft.setTextSize(3);
+        tft.setTextColor(ST77XX_WHITE);
+
+        String initText = "RECEIVING";
+        int charWidth = 6 * 3;
+        int textWidth = initText.length() * charWidth;
+        int x = (tft.width() - textWidth) / 2;
+        int y = (tft.height() - 30) / 2;
+
+        for (int i = 0; i < 5; i++)
+        {
+          uint16_t color = (i % 2 == 0) ? ST77XX_GREEN : ST77XX_BLACK;
+          tft.drawRect(x - 10, y - 10, textWidth + 20, 44, color);
+          delay(40);
+        }
+
+        tft.setCursor(x, y);
+        tft.println(initText);
         receiving = true;
         receiveStartTime = millis();
         tempChunk = tempChunk.substring(startIndex + 7);
@@ -1244,11 +1265,31 @@ void loop()
 
         if (saved)
         {
-          delay(1000);
-          bool loaded = loadScheduleData();
+          delay(2000);
+          bool loaded = false;
+          for (int attempt = 1; attempt <= 3; attempt++) // try up to 3 times
+          {
+            loaded = loadScheduleData();
+            if (loaded)
+            {
+              Serial.print("Schedule loaded successfully after BT transfer (try ");
+              Serial.print(attempt);
+              Serial.println(").");
+              break; // stop retrying if it works
+            }
+            else
+            {
+              Serial.print("Schedule load failed after BT transfer (try ");
+              Serial.print(attempt);
+              Serial.println("). Retrying...");
+              delay(500); // short pause before retry
+            }
+          }
           filestat = loaded;
+
           Serial.println(loaded ? "Schedule loaded successfully after BT transfer."
                                 : "Schedule load failed after BT transfer.");
+          delay(2000);
         }
         else
         {
@@ -1332,5 +1373,4 @@ void loop()
     showMainMenu();
     lastUpdate = millis();
   }
-
 }
