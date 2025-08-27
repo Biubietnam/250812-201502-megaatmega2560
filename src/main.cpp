@@ -6,6 +6,8 @@
 #include <Servo.h>
 #include <RTClib.h>
 #include <ArduinoJson.h>
+#include <StreamUtils.h>
+
 
 #define SD_CS 11
 #define TFT_CS 10
@@ -137,10 +139,11 @@ TubeMapping *getTubeMapping(String tubeName)
   }
   return nullptr;
 }
-inline bool acquireSD() {
-  digitalWrite(TFT_CS, HIGH);   // hard-deselect TFT
+inline bool acquireSD()
+{
+  digitalWrite(TFT_CS, HIGH); // hard-deselect TFT
   delayMicroseconds(5);
-  return SD.begin(SD_CS);       // (re)setup SD SPI each time
+  return SD.begin(SD_CS); // (re)setup SD SPI each time
 }
 // Added dispensing sequence function
 void dispenseFromTube(String tubeName)
@@ -464,8 +467,12 @@ bool startStreamingSave()
   // Make sure other SPI device (TFT) releases CS
   digitalWrite(TFT_CS, HIGH);
   delay(5);
-  if (!acquireSD()) { Serial.println("SD.begin failed"); sdBusy = false; return false; }
-
+  if (!acquireSD())
+  {
+    Serial.println("SD.begin failed");
+    sdBusy = false;
+    return false;
+  }
 
   // Ensure SD initialized
   if (!SD.begin(SD_CS))
@@ -591,6 +598,8 @@ bool finishStreamingSave()
     f2.sync();
     f2.close();
     r.close();
+    f2.flush();
+    r.flush();
     Serial.println("finishStreamingSave: fallback copy complete");
 
     // Try remove temp (best-effort)
@@ -684,18 +693,23 @@ bool checkMedicationTime()
 
 bool loadScheduleData()
 {
-  if (sdBusy)
-  {
+  if (sdBusy) {
     Serial.println("loadScheduleData: SD busy, abort");
     return false;
   }
   sdBusy = true;
+
+  // Make sure TFT releases SPI and SD is (re)initialized
   digitalWrite(TFT_CS, HIGH);
   delayMicroseconds(5);
-  if (!acquireSD()) { Serial.println("loadScheduleData: SD.begin failed"); sdBusy = false; return false; }
+  if (!acquireSD()) {
+    Serial.println("loadScheduleData: SD.begin failed");
+    sdBusy = false;
+    return false;
+  }
+
   File f = SD.open("data.json", FILE_READ);
-  if (!f)
-  {
+  if (!f) {
     Serial.println("Cannot find data.json");
     sdBusy = false;
     return false;
@@ -704,89 +718,68 @@ bool loadScheduleData()
   size_t fileSize = f.size();
   Serial.print("loadScheduleData: fileSize = ");
   Serial.println(fileSize);
-  if (fileSize == 0)
-  {
+  if (fileSize == 0) {
     Serial.println("loadScheduleData: file empty");
     f.close();
     sdBusy = false;
     return false;
   }
 
-  // Parse schedule into arrays using streaming approach
+  // ----- Use a FILTER to reduce memory needs -----
+  // filter[0] acts as a prototype for each element in the top-level array
+  StaticJsonDocument<256> filter;
+  filter[0]["tube"] = true;
+  filter[0]["type"] = true;
+  filter[0]["amount"] = true;
+  filter[0]["time_to_take"][0]["time"] = true;     // applies to all time_to_take items
+  filter[0]["time_to_take"][0]["dosage"] = true;
+
+  // Parse the entire JSON array directly from the file using a small buffered stream
   scheduleCount = 0;
 
-  // Use smaller buffer for streaming JSON parsing
-  const size_t bufferSize = 512;
-  DynamicJsonDocument doc(bufferSize);
+  // With filtering, a much smaller capacity is enough
+  StaticJsonDocument<2048> doc;
+  ReadBufferingStream in(f, 64);
+  DeserializationError err = deserializeJson(doc, in, DeserializationOption::Filter(filter));
 
-  // Read and parse in chunks
-  String currentMedication = "";
-  String currentTube = "";
-  int currentAmount = 0;
-  bool inMedArray = false;
-  bool inTimeArray = false;
+  f.close();
 
-  char buffer[128];
-  String jsonChunk = "";
+  if (err) {
+    Serial.print("JSON parse error: ");
+    Serial.println(err.c_str());
+    sdBusy = false;
+    return false;
+  }
 
-  while (f.available())
-  {
-    int bytesRead = f.readBytes(buffer, sizeof(buffer) - 1);
-    buffer[bytesRead] = '\0';
-    jsonChunk += String(buffer);
+  if (!doc.is<JsonArray>()) {
+    Serial.println("JSON root is not an array");
+    sdBusy = false;
+    return false;
+  }
 
-    // Process complete JSON objects as we find them
-    int objStart = jsonChunk.indexOf('{');
-    while (objStart != -1)
-    {
-      int objEnd = findMatchingBrace(jsonChunk, objStart);
-      if (objEnd != -1)
-      {
-        String jsonObj = jsonChunk.substring(objStart, objEnd + 1);
+  JsonArray arr = doc.as<JsonArray>();
+  for (JsonObject med : arr) {
+    const char* tubeC  = med["tube"]  | "";
+    const char* typeC  = med["type"]  | "";
+    int amount         = med["amount"] | 0;
 
-        // Parse this medication object
-        DynamicJsonDocument medDoc(256);
-        DeserializationError err = deserializeJson(medDoc, jsonObj);
+    JsonArray times = med["time_to_take"].as<JsonArray>();
+    if (times.isNull()) continue;
 
-        if (!err)
-        {
-          String tube = medDoc["tube"] | String("");
-          String type = medDoc["type"] | String("");
-          int amount = medDoc["amount"] | 0;
-          JsonArray times = medDoc["time_to_take"].as<JsonArray>();
+    for (JsonObject t : times) {
+      if (scheduleCount >= 10) break;   // protect array bounds
+      const char* timeC   = t["time"]   | "";
+      const char* dosageC = t["dosage"] | "";
 
-          for (JsonObject timeObj : times)
-          {
-            if (scheduleCount < 10)
-            {
-              schedules[scheduleCount].tube = tube;
-              schedules[scheduleCount].medication = type;
-              schedules[scheduleCount].amount = amount;
-              schedules[scheduleCount].time = timeObj["time"].as<String>();
-              schedules[scheduleCount].dosage = timeObj["dosage"].as<String>();
-              scheduleCount++;
-            }
-          }
-        }
-
-        // Remove processed object from chunk
-        jsonChunk = jsonChunk.substring(objEnd + 1);
-        objStart = jsonChunk.indexOf('{');
-      }
-      else
-      {
-        break; // Need more data
-      }
-    }
-
-    // Keep only partial data for next iteration
-    if (jsonChunk.length() > 256)
-    {
-      jsonChunk = jsonChunk.substring(jsonChunk.length() - 128);
+      schedules[scheduleCount].tube       = String(tubeC);
+      schedules[scheduleCount].medication = String(typeC);
+      schedules[scheduleCount].amount     = amount;
+      schedules[scheduleCount].time       = String(timeC);
+      schedules[scheduleCount].dosage     = String(dosageC);
+      scheduleCount++;
     }
   }
 
-  f.close();
   sdBusy = false;
 
   groupMedicationsByTime();
@@ -1085,8 +1078,9 @@ bool checkJsonFile()
   while (f.available())
     jsonStr += (char)f.read();
   f.close();
+  f.flush();
 
-  StaticJsonDocument<16384> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, jsonStr);
 
   if (err)
@@ -1197,7 +1191,6 @@ void loop()
   while (Serial1.available())
   {
     char c = Serial1.read();
-    Serial.print(c);
     tempChunk += c;
     byteCounter++;
 
@@ -1208,25 +1201,25 @@ void loop()
       int startIndex = tempChunk.indexOf("#START#");
       if (startIndex != -1)
       {
-        tft.fillScreen(ST77XX_BLACK);
-        tft.setTextSize(3);
-        tft.setTextColor(ST77XX_WHITE);
+        // tft.fillScreen(ST77XX_BLACK);
+        // tft.setTextSize(3);
+        // tft.setTextColor(ST77XX_WHITE);
 
-        String initText = "RECEIVING";
-        int charWidth = 6 * 3;
-        int textWidth = initText.length() * charWidth;
-        int x = (tft.width() - textWidth) / 2;
-        int y = (tft.height() - 30) / 2;
+        // String initText = "RECEIVING";
+        // int charWidth = 6 * 3;
+        // int textWidth = initText.length() * charWidth;
+        // int x = (tft.width() - textWidth) / 2;
+        // int y = (tft.height() - 30) / 2;
 
-        for (int i = 0; i < 5; i++)
-        {
-          uint16_t color = (i % 2 == 0) ? ST77XX_GREEN : ST77XX_BLACK;
-          tft.drawRect(x - 10, y - 10, textWidth + 20, 44, color);
-          delay(40);
-        }
+        // for (int i = 0; i < 5; i++)
+        // {
+        //   uint16_t color = (i % 2 == 0) ? ST77XX_GREEN : ST77XX_BLACK;
+        //   tft.drawRect(x - 10, y - 10, textWidth + 20, 44, color);
+        //   delay(40);
+        // }
 
-        tft.setCursor(x, y);
-        tft.println(initText);
+        // tft.setCursor(x, y);
+        // tft.println(initText);
         receiving = true;
         receiveStartTime = millis();
         tempChunk = tempChunk.substring(startIndex + 7);
@@ -1237,6 +1230,7 @@ void loop()
           Serial.println("Failed to start streaming save");
           receiving = false;
           tempChunk = "";
+          tempChunk.reserve(0);
           continue;
         }
 
@@ -1300,6 +1294,7 @@ void loop()
         tempChunk = tempChunk.substring(endIndex + 5);
         receiving = false;
         Serial.println("Complete");
+        tempChunk = String();
       }
       else
       {
@@ -1310,7 +1305,7 @@ void loop()
           writeStreamingChunk(chunkToWrite);
           tempChunk = tempChunk.substring(32);
         }
-      }
+      } 
     }
 
     if (byteCounter >= 32)
@@ -1333,6 +1328,7 @@ void loop()
       {
         Serial.println("Warning: temp buffer too large, clearing!");
         tempChunk = "";
+        tempChunk.reserve(0);
       }
     }
   }
@@ -1351,6 +1347,7 @@ void loop()
         sdBusy = false;
       }
       tempChunk = "";
+      tempChunk.reserve(0);
       receiving = false;
     }
     // If total > 20 seconds
@@ -1364,6 +1361,7 @@ void loop()
         sdBusy = false;
       }
       tempChunk = "";
+      tempChunk.reserve(0);
       receiving = false;
     }
   }
