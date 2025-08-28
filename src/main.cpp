@@ -19,8 +19,8 @@
 #define DROP_BTN 30
 #define FSR_PIN A4
 
-#define MAX_SCHEDULES 6  // Reduced from 10
-#define MAX_GROUPED 6    // Reduced from 10
+#define MAX_SCHEDULES 12  // Increased from 6 to 12 to accommodate more tubes and schedules
+#define MAX_GROUPED 12    // Increased from 6 to 12 to match MAX_SCHEDULES
 #define MAX_MEDS_PER_TIME 3  // Reduced from 5
 #define TEMP_BUFFER_SIZE 64  // Fixed buffer size
 
@@ -69,7 +69,7 @@ struct MedicationTime {
   int amount;
 };
 
-MedicationTime schedules[MAX_SCHEDULES]; // Reduced array size
+MedicationTime schedules[MAX_SCHEDULES]; // Increased array size
 int scheduleCount = 0;
 
 struct GroupedMedication {
@@ -81,8 +81,16 @@ struct GroupedMedication {
   int count;
 };
 
-GroupedMedication groupedSchedules[MAX_GROUPED]; // Reduced array size
+GroupedMedication groupedSchedules[MAX_GROUPED]; // Increased array size
 int groupedCount = 0;
+
+bool setupMode = false;
+int currentTubeSetup = 0;
+int totalTubesNeeded = 0;
+char setupInstructions[200];
+bool waitingForDropButton = false;
+
+static bool triggerSetupAfterBT = false;
 
 void openServo(Servo &servo, int standbyPos = 91, int openPos = 45) {
   Serial.println(F("Opening servo")); // Using F() macro for flash storage
@@ -738,9 +746,164 @@ void drawNotification() {
   }
 }
 
+void startTubeSetupMode() {
+  setupMode = true;
+  currentTubeSetup = 0;
+  waitingForDropButton = false;
+  
+  totalTubesNeeded = 0;
+  char uniqueTubes[10][8]; // Array to store unique tube names (max 10 tubes)
+  
+  // Go through all schedules and collect unique tube names
+  for (int i = 0; i < scheduleCount; i++) {
+    bool tubeExists = false;
+    
+    // Check if this tube name already exists in our unique list
+    for (int j = 0; j < totalTubesNeeded; j++) {
+      if (strcmp(uniqueTubes[j], schedules[i].tube) == 0) {
+        tubeExists = true;
+        break;
+      }
+    }
+    
+    // If tube doesn't exist in our list, add it
+    if (!tubeExists && totalTubesNeeded < 10) {
+      strcpy(uniqueTubes[totalTubesNeeded], schedules[i].tube);
+      totalTubesNeeded++;
+    }
+  }
+  
+  Serial.println(F("Starting tube setup mode"));
+  Serial.print(F("Total unique tubes to configure: "));
+  Serial.println(totalTubesNeeded);
+  
+  // Debug: Print all unique tubes found
+  Serial.println(F("Unique tubes found:"));
+  for (int i = 0; i < totalTubesNeeded; i++) {
+    Serial.print(F("- "));
+    Serial.println(uniqueTubes[i]);
+  }
+}
+
+void showTubeSetupScreen() {
+  tft.fillScreen(ST77XX_BLACK);
+  drawHeader();
+  
+  // Title
+  tft.setTextSize(2);
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(50, 50);
+  tft.print(F("TUBE SETUP"));
+  
+  // Progress indicator
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(20, 80);
+  tft.print(F("Tube "));
+  tft.print(currentTubeSetup + 1);
+  tft.print(F(" of "));
+  tft.print(totalTubesNeeded);
+  
+  // Current medication info
+  if (currentTubeSetup < groupedCount) {
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_CYAN);
+    tft.setCursor(20, 100);
+    tft.print(F("Put this medication:"));
+    
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.setCursor(20, 120);
+    
+    // Display medication name and dosage
+    if (currentTubeSetup < groupedCount && groupedSchedules[currentTubeSetup].count > 0) {
+      tft.print(groupedSchedules[currentTubeSetup].medications[0]);
+      tft.setCursor(20, 135);
+      tft.print(groupedSchedules[currentTubeSetup].dosages[0]);
+    }
+    
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_GREEN);
+    tft.setCursor(20, 160);
+    tft.print(F("Into TUBE "));
+    tft.print(currentTubeSetup + 1);
+  }
+  
+  // Instructions
+  tft.setTextSize(1);
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(20, 190);
+  if (waitingForDropButton) {
+    bool blink = (millis() / 500) % 2;
+    if (blink) {
+      tft.print(F("Press DROP button when done"));
+    }
+  } else {
+    tft.print(F("Place medication in tube"));
+    tft.setCursor(20, 205);
+    tft.print(F("then press DROP button"));
+  }
+  
+  // Progress bar
+  int barWidth = 280;
+  int barHeight = 10;
+  int barX = 20;
+  int barY = 230;
+  
+  tft.drawRect(barX, barY, barWidth, barHeight, ST77XX_WHITE);
+  int progress = (currentTubeSetup * barWidth) / totalTubesNeeded;
+  tft.fillRect(barX + 1, barY + 1, progress, barHeight - 2, ST77XX_GREEN);
+}
+
+void handleTubeSetupButton() {
+  Serial.print(F("Tube "));
+  Serial.print(currentTubeSetup + 1);
+  Serial.println(F(" setup completed"));
+  
+  currentTubeSetup++;
+  waitingForDropButton = false;
+  
+  if (currentTubeSetup >= totalTubesNeeded) {
+    // Setup complete
+    setupMode = false;
+    Serial.println(F("Tube setup completed! System ready for automatic dispensing."));
+    
+    // Show completion message
+    tft.fillScreen(ST77XX_BLACK);
+    drawHeader();
+    tft.setTextSize(2);
+    tft.setTextColor(ST77XX_GREEN);
+    tft.setCursor(50, 100);
+    tft.print(F("SETUP"));
+    tft.setCursor(50, 130);
+    tft.print(F("COMPLETE!"));
+    
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_WHITE);
+    tft.setCursor(20, 170);
+    tft.print(F("System ready for"));
+    tft.setCursor(20, 185);
+    tft.print(F("automatic dispensing"));
+    
+    delay(3000);
+  } else {
+    waitingForDropButton = false;
+  }
+}
+
 void showMainMenu() {
   tft.fillScreen(ST77XX_BLACK);
   drawHeader();
+
+  if (!setupMode && triggerSetupAfterBT && filestat && groupedCount > 0) {
+    startTubeSetupMode();
+    triggerSetupAfterBT = false; // Reset the flag
+  }
+
+  if (setupMode) {
+    showTubeSetupScreen();
+    return; // Pause other tasks when in setup mode
+  }
 
   if (checkMedicationTime() && !showNotification) {
     showNotification = true;
@@ -896,13 +1059,16 @@ void setup() {
 }
 
 void loop() {
-  delay(100);
   rtctime = rtc.now();
 
-  if (showNotification && digitalRead(DROP_BTN) == LOW) {
+  if (digitalRead(DROP_BTN) == LOW) {
     delay(50);
     if (digitalRead(DROP_BTN) == LOW) {
-      handleDispensing();
+      if (setupMode) {
+        handleTubeSetupButton();
+      } else if (showNotification) {
+        handleDispensing();
+      }
       delay(500);
     }
   }
@@ -976,6 +1142,9 @@ void loop() {
               Serial.print(F("Schedule loaded successfully after BT transfer (try ")); // Using F() macro
               Serial.print(attempt);
               Serial.println(F(").")); // Using F() macro
+              currentTubeSetup = 0;
+              setupMode = false;
+              triggerSetupAfterBT = true;
               break;
             } else {
               Serial.print(F("Schedule load failed after BT transfer (try ")); // Using F() macro

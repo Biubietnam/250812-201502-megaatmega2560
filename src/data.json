@@ -43,5 +43,16 @@
                 "dosage": "1 tablet"
             }
         ]
+    },
+    {
+        "tube": "tube4",
+        "type": "Ibuprofen21",
+        "amount": 90,
+        "time_to_take": [
+            {
+                "time": "07:30",
+                "dosage": "1 tablet"
+            }
+        ]
     }
 ]

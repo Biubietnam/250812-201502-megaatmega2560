@@ -27,6 +27,9 @@ class ResponsiveAutoPillDispenser:
         self.qr_data = ""
         self.medication_data = []
         
+        self.manual_medications = []
+        self.current_med_schedules = []
+        
         self.setup_responsive_ui()
         self.bind_resize_events()
         
@@ -97,6 +100,8 @@ class ResponsiveAutoPillDispenser:
         # Upload section
         self.create_responsive_upload()
         
+        self.create_manual_input_section()
+        
         # Preview section (larger and properly scrollable)
         self.create_responsive_preview()
         
@@ -163,7 +168,7 @@ class ResponsiveAutoPillDispenser:
         """Create responsive mode selection"""
         mode_frame = ttk.LabelFrame(
             self.content_frame,
-            text="📁 Upload Method",
+            text="📁 Input Method",
             padding=15,
             bootstyle="info"
         )
@@ -175,11 +180,19 @@ class ResponsiveAutoPillDispenser:
         
         self.json_btn = ttk.Button(
             button_frame,
-            text="📄 JSON Configuration",
+            text="📄 JSON File",
             bootstyle="primary",
             command=lambda: self.switch_mode("json")
         )
-        self.json_btn.pack(side="left", padx=(0, 10), fill="x", expand=True)
+        self.json_btn.pack(side="left", padx=(0, 5), fill="x", expand=True)
+        
+        self.manual_btn = ttk.Button(
+            button_frame,
+            text="✏️ Manual Input",
+            bootstyle="primary-outline",
+            command=lambda: self.switch_mode("manual")
+        )
+        self.manual_btn.pack(side="left", padx=(5, 5), fill="x", expand=True)
         
         self.qr_btn = ttk.Button(
             button_frame,
@@ -187,7 +200,7 @@ class ResponsiveAutoPillDispenser:
             bootstyle="primary-outline",
             command=lambda: self.switch_mode("qr")
         )
-        self.qr_btn.pack(side="left", fill="x", expand=True)
+        self.qr_btn.pack(side="left", padx=(5, 0), fill="x", expand=True)
         
         # Description
         self.mode_desc = ttk.Label(
@@ -280,6 +293,175 @@ class ResponsiveAutoPillDispenser:
         )
         self.summary_label.pack(side="right")
         
+    def create_manual_input_section(self):
+        """Create manual medication input section"""
+        self.manual_frame = ttk.LabelFrame(
+            self.content_frame,
+            text="✏️ Manual Medication Entry",
+            padding=15,
+            bootstyle="success"
+        )
+        # Initially hidden
+        
+        # Medication details frame
+        med_details_frame = ttk.LabelFrame(
+            self.manual_frame,
+            text="💊 Medication Details",
+            padding=10,
+            bootstyle="primary"
+        )
+        med_details_frame.pack(fill="x", pady=(0, 10))
+        
+        # Tube selection
+        tube_frame = ttk.Frame(med_details_frame)
+        tube_frame.pack(fill="x", pady=5)
+        ttk.Label(tube_frame, text="🏺 Tube:", width=12).pack(side="left")
+        self.tube_var = ttk.StringVar()
+        tube_combo = ttk.Combobox(
+            tube_frame,
+            textvariable=self.tube_var,
+            values=["tube1", "tube2", "tube3", "tube4", "tube5", "tube6"],
+            state="readonly",
+            width=15
+        )
+        tube_combo.pack(side="left", padx=(5, 0))
+        
+        # Medication type
+        type_frame = ttk.Frame(med_details_frame)
+        type_frame.pack(fill="x", pady=5)
+        ttk.Label(type_frame, text="💊 Type:", width=12).pack(side="left")
+        self.med_type_var = ttk.StringVar()
+        ttk.Entry(type_frame, textvariable=self.med_type_var, width=25).pack(side="left", padx=(5, 0))
+        
+        # Amount
+        amount_frame = ttk.Frame(med_details_frame)
+        amount_frame.pack(fill="x", pady=5)
+        ttk.Label(amount_frame, text="📦 Amount:", width=12).pack(side="left")
+        self.amount_var = ttk.StringVar()
+        ttk.Entry(amount_frame, textvariable=self.amount_var, width=10).pack(side="left", padx=(5, 0))
+        ttk.Label(amount_frame, text="tablets").pack(side="left", padx=(5, 0))
+        
+        # Schedule section
+        schedule_frame = ttk.LabelFrame(
+            self.manual_frame,
+            text="⏰ Dosage Schedule",
+            padding=10,
+            bootstyle="warning"
+        )
+        schedule_frame.pack(fill="x", pady=(0, 10))
+        
+        # Add schedule controls
+        add_schedule_frame = ttk.Frame(schedule_frame)
+        add_schedule_frame.pack(fill="x", pady=5)
+        
+        ttk.Label(add_schedule_frame, text="🕐 Time:", width=8).pack(side="left")
+        self.schedule_time_var = ttk.StringVar()
+        time_entry = ttk.Entry(add_schedule_frame, textvariable=self.schedule_time_var, width=8)
+        time_entry.pack(side="left", padx=(5, 10))
+        time_entry.insert(0, "HH:MM")
+        time_entry.bind("<FocusIn>", lambda e: time_entry.delete(0, "end") if time_entry.get() == "HH:MM" else None)
+        time_entry.bind("<FocusOut>", lambda e: time_entry.insert(0, "HH:MM") if time_entry.get() == "" else None)
+        
+        ttk.Label(add_schedule_frame, text="💊 Dosage:", width=8).pack(side="left")
+        self.schedule_dosage_var = ttk.StringVar()
+        dosage_entry = ttk.Entry(add_schedule_frame, textvariable=self.schedule_dosage_var, width=15)
+        dosage_entry.pack(side="left", padx=(5, 10))
+        dosage_entry.insert(0, "1 tablet")
+        dosage_entry.bind("<FocusIn>", lambda e: dosage_entry.delete(0, "end") if dosage_entry.get() == "1 tablet" else None)
+        dosage_entry.bind("<FocusOut>", lambda e: dosage_entry.insert(0, "1 tablet") if dosage_entry.get() == "" else None)
+        
+        ttk.Button(
+            add_schedule_frame,
+            text="➕ Add Schedule",
+            bootstyle="success-outline",
+            command=self.add_schedule
+        ).pack(side="left", padx=(10, 0))
+        
+        # Schedule list
+        self.schedule_listbox = ttk.Treeview(
+            schedule_frame,
+            columns=("time", "dosage"),
+            show="headings",
+            height=4
+        )
+        self.schedule_listbox.heading("time", text="Time")
+        self.schedule_listbox.heading("dosage", text="Dosage")
+        self.schedule_listbox.column("time", width=100)
+        self.schedule_listbox.column("dosage", width=150)
+        self.schedule_listbox.pack(fill="x", pady=5)
+        
+        # Schedule controls
+        schedule_controls = ttk.Frame(schedule_frame)
+        schedule_controls.pack(fill="x", pady=5)
+        
+        ttk.Button(
+            schedule_controls,
+            text="🗑️ Remove Selected",
+            bootstyle="danger-outline",
+            command=self.remove_schedule
+        ).pack(side="left")
+        
+        # Medication controls
+        med_controls_frame = ttk.Frame(self.manual_frame)
+        med_controls_frame.pack(fill="x", pady=10)
+        
+        ttk.Button(
+            med_controls_frame,
+            text="💾 Save Medication",
+            bootstyle="success",
+            command=self.save_medication
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            med_controls_frame,
+            text="🧹 Clear Form",
+            bootstyle="secondary-outline",
+            command=self.clear_medication_form
+        ).pack(side="left")
+        
+        # Manual medications list
+        manual_list_frame = ttk.LabelFrame(
+            self.manual_frame,
+            text="📋 Added Medications",
+            padding=10,
+            bootstyle="info"
+        )
+        manual_list_frame.pack(fill="both", expand=True, pady=(10, 0))
+        
+        self.manual_listbox = ttk.Treeview(
+            manual_list_frame,
+            columns=("tube", "type", "amount", "schedules"),
+            show="headings",
+            height=6
+        )
+        self.manual_listbox.heading("tube", text="Tube")
+        self.manual_listbox.heading("type", text="Type")
+        self.manual_listbox.heading("amount", text="Amount")
+        self.manual_listbox.heading("schedules", text="Schedules")
+        self.manual_listbox.column("tube", width=80)
+        self.manual_listbox.column("type", width=120)
+        self.manual_listbox.column("amount", width=80)
+        self.manual_listbox.column("schedules", width=200)
+        self.manual_listbox.pack(fill="both", expand=True, pady=5)
+        
+        # Manual list controls
+        manual_controls = ttk.Frame(manual_list_frame)
+        manual_controls.pack(fill="x", pady=5)
+        
+        ttk.Button(
+            manual_controls,
+            text="🗑️ Remove Selected",
+            bootstyle="danger-outline",
+            command=self.remove_manual_medication
+        ).pack(side="left", padx=(0, 10))
+        
+        ttk.Button(
+            manual_controls,
+            text="📄 Use Manual Data",
+            bootstyle="primary",
+            command=self.use_manual_data
+        ).pack(side="right")
+        
     def create_responsive_preview(self):
         """Create responsive and properly scrollable preview section"""
         preview_frame = ttk.LabelFrame(
@@ -327,20 +509,6 @@ class ResponsiveAutoPillDispenser:
         
         # Initial empty state
         self.show_empty_preview()
-        
-    def show_empty_preview(self):
-        """Show empty preview state"""
-        for widget in self.preview_content.winfo_children():
-            widget.destroy()
-            
-        empty_label = ttk.Label(
-            self.preview_content,
-            text="📋 No medication data to display\nUpload a JSON file to see medication schedule",
-            font=("Segoe UI", 12),
-            bootstyle="secondary",
-            justify="center"
-        )
-        empty_label.pack(expand=True, pady=50)
         
     def create_responsive_status(self):
         """Create responsive status section"""
@@ -460,22 +628,32 @@ class ResponsiveAutoPillDispenser:
         self.reset_app_btn.pack(side="right", fill="x", expand=True, padx=(5, 0))
         
     def switch_mode(self, mode):
-        """Switch between JSON and QR modes"""
+        """Switch between JSON, Manual, and QR modes"""
         self.upload_mode.set(mode)
         
         if mode == "json":
             self.json_btn.configure(bootstyle="primary")
+            self.manual_btn.configure(bootstyle="primary-outline")
             self.qr_btn.configure(bootstyle="primary-outline")
             self.mode_desc.configure(text="Upload medication schedule via JSON configuration file")
             self.file_btn.configure(text="📂 Choose JSON File")
-        else:
+            self.manual_frame.pack_forget()
+        elif mode == "manual":
             self.json_btn.configure(bootstyle="primary-outline")
+            self.manual_btn.configure(bootstyle="primary")
+            self.qr_btn.configure(bootstyle="primary-outline")
+            self.mode_desc.configure(text="Manually enter medication details and schedules")
+            self.manual_frame.pack(fill="both", expand=True, pady=(0, 15))
+        else:  # QR mode
+            self.json_btn.configure(bootstyle="primary-outline")
+            self.manual_btn.configure(bootstyle="primary-outline")
             self.qr_btn.configure(bootstyle="primary")
             self.mode_desc.configure(text="Upload QR code containing medication data")
             self.file_btn.configure(text="📱 Upload QR Code")
+            self.manual_frame.pack_forget()
             
         self.show_empty_preview()
-        
+    
     def refresh_ports(self):
         """Refresh COM ports with animation"""
         self.refresh_btn.configure(text="🔄 Scanning...", state="disabled")
@@ -695,11 +873,11 @@ class ResponsiveAutoPillDispenser:
                 ])
                 
             except Exception as e:
-                self.app.after(0, lambda: [
-                    self.show_notification(f"Submission failed: {str(e)}", "error"),
+                self.app.after(0, lambda err=e: [
+                    self.show_notification(f"Submission failed: {str(err)}", "error"),
                     self.status_label.configure(text="❌ Submission failed", bootstyle="danger"),
                     self.chunk_progress_label.configure(text="❌ Transmission interrupted"),
-                    messagebox.showerror("Error", f"Failed to submit: {str(e)}")
+                    messagebox.showerror("Error", f"Failed to submit: {str(err)}")
                 ])
             finally:
                 self.app.after(0, self.reset_submit_button)
@@ -718,6 +896,12 @@ class ResponsiveAutoPillDispenser:
         self.medication_data = []
         self.file_var.set("")
         self.qr_data = ""
+        # Added manual data clearing
+        self.manual_medications = []
+        self.current_med_schedules = []
+        self.update_manual_listbox()
+        self.clear_medication_form()
+        
         self.file_label.configure(text="No medication data loaded")
         self.summary_label.configure(text="")
         self.show_empty_preview()
@@ -732,7 +916,7 @@ class ResponsiveAutoPillDispenser:
         self.status_label.configure(text="✅ Ready for configuration", bootstyle="success")
         self.chunk_progress_label.configure(text="")
         self.show_notification("Application reset", "info")
-        
+
     def show_notification(self, message, type_="info"):
         """Show temporary notification"""
         colors = {
@@ -768,8 +952,170 @@ class ResponsiveAutoPillDispenser:
     def run(self):
         """Start the application"""
         self.app.mainloop()
-
-# Create and run the application
+    
+    def add_schedule(self):
+        """Add a schedule to current medication"""
+        time_str = self.schedule_time_var.get().strip()
+        dosage_str = self.schedule_dosage_var.get().strip()
+        
+        if not time_str or not dosage_str:
+            messagebox.showerror("Error", "Please enter both time and dosage!")
+            return
+            
+        # Validate time format
+        try:
+            time_parts = time_str.split(":")
+            if len(time_parts) != 2:
+                raise ValueError()
+            hour, minute = int(time_parts[0]), int(time_parts[1])
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("Error", "Please enter time in HH:MM format (24-hour)!")
+            return
+            
+        # Add to schedule list
+        schedule_item = {"time": time_str, "dosage": dosage_str}
+        self.current_med_schedules.append(schedule_item)
+        
+        # Update listbox
+        self.schedule_listbox.insert("", "end", values=(time_str, dosage_str))
+        
+        # Clear inputs
+        self.schedule_time_var.set("")
+        self.schedule_dosage_var.set("")
+        
+    def remove_schedule(self):
+        """Remove selected schedule"""
+        selection = self.schedule_listbox.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a schedule to remove!")
+            return
+            
+        # Get index and remove
+        item = selection[0]
+        index = self.schedule_listbox.index(item)
+        self.current_med_schedules.pop(index)
+        self.schedule_listbox.delete(item)
+        
+    def save_medication(self):
+        """Save current medication to manual list"""
+        tube = self.tube_var.get()
+        med_type = self.med_type_var.get().strip()
+        amount_str = self.amount_var.get().strip()
+        
+        if not tube or not med_type or not amount_str:
+            messagebox.showerror("Error", "Please fill in all medication details!")
+            return
+            
+        if not self.current_med_schedules:
+            messagebox.showerror("Error", "Please add at least one dosage schedule!")
+            return
+            
+        try:
+            amount = int(amount_str)
+            if amount <= 0:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid positive number for amount!")
+            return
+            
+        # Check if tube already used
+        for med in self.manual_medications:
+            if med["tube"] == tube:
+                if not messagebox.askyesno("Confirm", f"Tube {tube} already has medication. Replace it?"):
+                    return
+                self.manual_medications.remove(med)
+                break
+                
+        # Create medication object
+        medication = {
+            "tube": tube,
+            "type": med_type,
+            "amount": amount,
+            "time_to_take": self.current_med_schedules.copy()
+        }
+        
+        self.manual_medications.append(medication)
+        self.update_manual_listbox()
+        self.clear_medication_form()
+        self.show_notification(f"Added {med_type} to {tube}", "success")
+        
+    def clear_medication_form(self):
+        """Clear medication input form"""
+        self.tube_var.set("")
+        self.med_type_var.set("")
+        self.amount_var.set("")
+        self.schedule_time_var.set("")
+        self.schedule_dosage_var.set("")
+        self.current_med_schedules.clear()
+        
+        # Clear schedule listbox
+        for item in self.schedule_listbox.get_children():
+            self.schedule_listbox.delete(item)
+            
+    def update_manual_listbox(self):
+        """Update manual medications listbox"""
+        # Clear existing items
+        for item in self.manual_listbox.get_children():
+            self.manual_listbox.delete(item)
+            
+        # Add medications
+        for med in self.manual_medications:
+            schedules_str = ", ".join([f"{s['time']} ({s['dosage']})" for s in med['time_to_take']])
+            self.manual_listbox.insert("", "end", values=(
+                med['tube'],
+                med['type'],
+                f"{med['amount']} tablets",
+                schedules_str
+            ))
+            
+    def remove_manual_medication(self):
+        """Remove selected manual medication"""
+        selection = self.manual_listbox.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a medication to remove!")
+            return
+            
+        item = selection[0]
+        index = self.manual_listbox.index(item)
+        removed_med = self.manual_medications.pop(index)
+        self.manual_listbox.delete(item)
+        self.show_notification(f"Removed {removed_med['type']}", "info")
+        
+    def use_manual_data(self):
+        """Use manually entered data as medication data"""
+        if not self.manual_medications:
+            messagebox.showerror("Error", "No manual medications added!")
+            return
+            
+        self.medication_data = self.manual_medications.copy()
+        
+        # Update UI
+        total_medications = len(self.medication_data)
+        total_tubes = len(set(med['tube'] for med in self.medication_data))
+        total_schedules = sum(len(med['time_to_take']) for med in self.medication_data)
+        
+        self.file_label.configure(text="📝 Manual Input Data")
+        self.summary_label.configure(text=f"{total_medications} meds | {total_tubes} tubes | {total_schedules} schedules")
+        
+        # Display preview
+        self.display_medication_preview(self.medication_data)
+        self.show_notification(f"Using {total_medications} manually entered medications", "success")
+    
+    def show_empty_preview(self):
+        """Show empty preview state"""
+        for widget in self.preview_content.winfo_children():
+            widget.destroy()
+            
+        empty_label = ttk.Label(
+            self.preview_content,
+            text="📋 No medication data to display\nUpload a JSON file to see medication schedule",
+            font=("Segoe UI", 12),
+            bootstyle="secondary",
+            justify="center"
+        )
+        empty_label.pack(expand=True, pady=50)
 if __name__ == "__main__":
     app = ResponsiveAutoPillDispenser()
     app.run()
