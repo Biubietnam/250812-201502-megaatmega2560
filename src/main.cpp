@@ -8,7 +8,6 @@
 #include <ArduinoJson.h>
 #include <StreamUtils.h>
 
-
 #define SD_CS 11
 #define TFT_CS 10
 #define TFT_RST 8
@@ -20,279 +19,218 @@
 #define DROP_BTN 30
 #define FSR_PIN A4
 
+#define MAX_SCHEDULES 6  // Reduced from 10
+#define MAX_GROUPED 6    // Reduced from 10
+#define MAX_MEDS_PER_TIME 3  // Reduced from 5
+#define TEMP_BUFFER_SIZE 64  // Fixed buffer size
+
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 RTC_DS3231 rtc;
 SdFat SD;
 File file;
-Servo servo1;
-
-Servo servo2;
-
-Servo servo3;
-
-Servo servo4;
+Servo servo1, servo2, servo3, servo4;
 
 bool filestat = false;
 bool receiving = false;
 unsigned long receiveStartTime = 0;
 unsigned long lastByteTime = 0;
-File streamingFile; // For streaming writes
+File streamingFile;
 bool streamingActive = false;
 
-String notificationMessage = "";
+char notificationMessage[200] = "";
 unsigned long notificationStartTime = 0;
 volatile bool sdBusy = false;
 DateTime rtctime;
-// Menu state variables
+
 int currentMenuPage = 0;
 unsigned long lastMenuUpdate = 0;
 bool showNotification = false;
+bool motorStates[4] = {false, false, false, false};
 
-// Added motor state tracking for toggle functionality
-bool motorStates[4] = {false, false, false, false}; // Track motor on/off states
-
-// Added tube mapping structure
-struct TubeMapping
-{
-  String tubeName;
+struct TubeMapping {
+  char tubeName[8];  // Fixed size instead of String
   int servoIndex;
   int motorPin;
   Servo *servo;
 };
 
-// Define tube-to-servo/motor mapping
 TubeMapping tubeMappings[4] = {
     {"tube1", 0, MOTOR_1, &servo1},
     {"tube2", 1, MOTOR_2, &servo2},
     {"tube3", 2, MOTOR_3, &servo3},
-    {"tube4", 3, MOTOR_4, &servo4}};
+    {"tube4", 3, MOTOR_4, &servo4}
+};
 
-// Schedule data structure
-struct MedicationTime
-{
-  String time;
-  String dosage;
-  String medication;
-  String tube;
+struct MedicationTime {
+  char time[6];        // "HH:MM" format
+  char dosage[16];     // Fixed size for dosage
+  char medication[24]; // Fixed size for medication name
+  char tube[8];        // Fixed size for tube name
   int amount;
 };
 
-MedicationTime schedules[10]; // Max 10 schedule entries
+MedicationTime schedules[MAX_SCHEDULES]; // Reduced array size
 int scheduleCount = 0;
 
-// Added structure for grouping medications by time
-struct GroupedMedication
-{
-  String time;
-  String medications[5]; // Max 5 medications per time slot
-  String dosages[5];
-  String tubes[5];
-  int amounts[5];
+struct GroupedMedication {
+  char time[6];                           // "HH:MM" format
+  char medications[MAX_MEDS_PER_TIME][24]; // Fixed size arrays
+  char dosages[MAX_MEDS_PER_TIME][16];
+  char tubes[MAX_MEDS_PER_TIME][8];
+  int amounts[MAX_MEDS_PER_TIME];
   int count;
 };
 
-GroupedMedication groupedSchedules[10];
+GroupedMedication groupedSchedules[MAX_GROUPED]; // Reduced array size
 int groupedCount = 0;
 
-void openServo(Servo &servo, int standbyPos = 91, int openPos = 45)
-{
-  Serial.println("Opening servo");
+void openServo(Servo &servo, int standbyPos = 91, int openPos = 45) {
+  Serial.println(F("Opening servo")); // Using F() macro for flash storage
   servo.write(openPos);
   delay(600);
   servo.write(standbyPos);
 }
 
-void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135)
-{
-  Serial.println("Closing servo");
+void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135) {
+  Serial.println(F("Closing servo")); // Using F() macro
   servo.write(closePos);
   delay(600);
   servo.write(standbyPos);
 }
 
-// Modified triggerMotor to be a toggle function instead of time-based
-void triggerMotor(int motorPin, bool turnOn)
-{
-  if (turnOn)
-  {
-    Serial.print("Starting motor on pin ");
+void triggerMotor(int motorPin, bool turnOn) {
+  if (turnOn) {
+    Serial.print(F("Starting motor on pin ")); // Using F() macro
     Serial.println(motorPin);
-    digitalWrite(motorPin, HIGH); // Turn motor ON via NPN transistor
-  }
-  else
-  {
-    Serial.print("Stopping motor on pin ");
+    digitalWrite(motorPin, HIGH);
+  } else {
+    Serial.print(F("Stopping motor on pin ")); // Using F() macro
     Serial.println(motorPin);
-    digitalWrite(motorPin, LOW); // Turn motor OFF
+    digitalWrite(motorPin, LOW);
   }
 }
 
-// Added function to get tube mapping by tube name
-TubeMapping *getTubeMapping(String tubeName)
-{
-  for (int i = 0; i < 4; i++)
-  {
-    if (tubeMappings[i].tubeName == tubeName)
-    {
+TubeMapping *getTubeMapping(const char* tubeName) {
+  for (int i = 0; i < 4; i++) {
+    if (strcmp(tubeMappings[i].tubeName, tubeName) == 0) {
       return &tubeMappings[i];
     }
   }
   return nullptr;
 }
-inline bool acquireSD()
-{
-  digitalWrite(TFT_CS, HIGH); // hard-deselect TFT
+
+inline bool acquireSD() {
+  digitalWrite(TFT_CS, HIGH);
   delayMicroseconds(5);
-  return SD.begin(SD_CS); // (re)setup SD SPI each time
+  return SD.begin(SD_CS);
 }
-// Added dispensing sequence function
-void dispenseFromTube(String tubeName)
-{
+
+void dispenseFromTube(const char* tubeName) {
   TubeMapping *mapping = getTubeMapping(tubeName);
-  if (mapping == nullptr)
-  {
-    Serial.print("Unknown tube: ");
+  if (mapping == nullptr) {
+    Serial.print(F("Unknown tube: "));
     Serial.println(tubeName);
     return;
   }
 
-  Serial.print("Dispensing from ");
+  Serial.print(F("Dispensing from "));
   Serial.println(tubeName);
 
-  // Read initial weight
-  float initialWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
-  Serial.print("Initial weight: ");
+  float initialWeight = (analogRead(FSR_PIN) /1.504761904761905);
+  Serial.print(F("Initial weight: "));
   Serial.print(initialWeight, 1);
-  Serial.println(" g");
+  Serial.println(F(" g"));
 
-  // Open servo first
   openServo(*mapping->servo);
   delay(500);
 
-  // Start motor
   triggerMotor(mapping->motorPin, true);
   motorStates[mapping->servoIndex] = true;
 
-  // Monitor weight increase
   unsigned long startTime = millis();
   bool dispensingComplete = false;
 
-  while (!dispensingComplete && (millis() - startTime < 10000))
-  { // 10 second timeout
-    float currentWeight = (analogRead(FSR_PIN) / 1023.0) * 1000.0;
+  while (!dispensingComplete && (millis() - startTime < 10000)) {
+    float currentWeight = (analogRead(FSR_PIN) / 1.504761904761905);
     float weightIncrease = currentWeight - initialWeight;
 
-    Serial.print("Current weight: ");
+    Serial.print(F("Current weight: "));
     Serial.print(currentWeight, 1);
-    Serial.print(" g, Increase: ");
+    Serial.print(F(" g, Increase: "));
     Serial.print(weightIncrease, 1);
-    Serial.println(" g");
+    Serial.println(F(" g"));
 
-    // Check if weight increased by 5 grams
-    if (weightIncrease >= 5.0)
-    {
+    if (weightIncrease >= 5.0) {
       dispensingComplete = true;
-      Serial.println("Target weight reached!");
+      Serial.println(F("Target weight reached!"));
     }
-
     delay(100);
   }
 
-  // Stop motor
   triggerMotor(mapping->motorPin, false);
   motorStates[mapping->servoIndex] = false;
 
-  // Close servo
   delay(500);
   closeServo(*mapping->servo);
 
-  Serial.print("Dispensing complete for ");
+  Serial.print(F("Dispensing complete for "));
   Serial.println(tubeName);
 }
 
-// Added function to handle dispensing sequence for multiple tubes
-void handleDispensing()
-{
-  Serial.println("DROP button pressed - starting dispensing sequence");
+void handleDispensing() {
+  Serial.println(F("DROP button pressed - starting dispensing sequence"));
 
-  // Find current medication group
-  String currentTime = "";
-  if (rtctime.hour() < 10)
-    currentTime += "0";
-  currentTime += String(rtctime.hour());
-  currentTime += ":";
-  if (rtctime.minute() < 10)
-    currentTime += "0";
-  currentTime += String(rtctime.minute());
+  char currentTime[6];
+  sprintf(currentTime, "%02d:%02d", rtctime.hour(), rtctime.minute());
 
   GroupedMedication *currentGroup = nullptr;
-  for (int i = 0; i < groupedCount; i++)
-  {
-    if (groupedSchedules[i].time == currentTime)
-    {
+  for (int i = 0; i < groupedCount; i++) {
+    if (strcmp(groupedSchedules[i].time, currentTime) == 0) { // Using strcmp
       currentGroup = &groupedSchedules[i];
       break;
     }
   }
 
-  if (currentGroup == nullptr)
-  {
-    Serial.println("No medications scheduled for current time");
+  if (currentGroup == nullptr) {
+    Serial.println(F("No medications scheduled for current time"));
     return;
   }
 
-  // Dispense from each tube sequentially
-  for (int i = 0; i < currentGroup->count; i++)
-  {
-    Serial.print("Dispensing medication ");
+  for (int i = 0; i < currentGroup->count; i++) {
+    Serial.print(F("Dispensing medication "));
     Serial.print(i + 1);
-    Serial.print(" of ");
+    Serial.print(F(" of "));
     Serial.print(currentGroup->count);
-    Serial.print(": ");
+    Serial.print(F(": "));
     Serial.println(currentGroup->medications[i]);
 
     dispenseFromTube(currentGroup->tubes[i]);
 
-    // Delay between tubes if multiple
-    if (i < currentGroup->count - 1)
-    {
-      Serial.println("Waiting before next tube...");
+    if (i < currentGroup->count - 1) {
+      Serial.println(F("Waiting before next tube..."));
       delay(2000);
     }
   }
 
-  Serial.println("Dispensing sequence complete");
-
-  // Dismiss notification after successful dispensing
+  Serial.println(F("Dispensing sequence complete"));
   showNotification = false;
 }
 
-// ---------------- Animation Functions ----------------
-void drawLoadingBar(int progress, int x, int y, int width, int height)
-{
-  // Draw border
+void drawLoadingBar(int progress, int x, int y, int width, int height) {
   tft.drawRect(x, y, width, height, ST77XX_WHITE);
-
-  // Fill progress
   int fillWidth = (progress * (width - 2)) / 100;
-  if (fillWidth > 0)
-  {
+  if (fillWidth > 0) {
     tft.fillRect(x + 1, y + 1, fillWidth, height - 2, ST77XX_GREEN);
   }
 }
 
-void drawSpinner(int x, int y, int radius, int angle)
-{
-  // Clear previous spinner
+void drawSpinner(int x, int y, int radius, int angle) {
   tft.fillCircle(x, y, radius + 2, ST77XX_BLACK);
-
-  // Draw spinner segments
-  for (int i = 0; i < 8; i++)
-  {
+  
+  for (int i = 0; i < 8; i++) {
     int segmentAngle = (angle + i * 45) % 360;
     int brightness = 255 - (i * 30);
-    if (brightness < 50)
-      brightness = 50;
+    if (brightness < 50) brightness = 50;
 
     int x1 = x + (radius - 3) * cos(segmentAngle * PI / 180);
     int y1 = y + (radius - 3) * sin(segmentAngle * PI / 180);
@@ -304,230 +242,123 @@ void drawSpinner(int x, int y, int radius, int angle)
     tft.drawLine(x1 + 1, y1, x2 + 1, y2, color);
   }
 }
-int findMatchingBrace(const String &str, int start)
-{
+
+int findMatchingBrace(const String &str, int start) {
   int braceCount = 0;
-  for (int i = start; i < str.length(); i++)
-  {
-    if (str[i] == '{')
-      braceCount++;
-    else if (str[i] == '}')
-    {
+  for (int i = start; i < str.length(); i++) {
+    if (str[i] == '{') braceCount++;
+    else if (str[i] == '}') {
       braceCount--;
-      if (braceCount == 0)
-        return i;
+      if (braceCount == 0) return i;
     }
   }
   return -1;
 }
 
-void animatedIntro()
-{
+void animatedIntro() {
   tft.fillScreen(ST77XX_BLACK);
   tft.setRotation(3);
-
-  // Phase 1: System startup text (0-800ms)
-  tft.setTextSize(2);
-  tft.setTextColor(ST77XX_CYAN);
-  tft.setCursor(50, 50);
-  tft.println("SYSTEM STARTUP");
-
-  // Animated dots
-  for (int i = 0; i < 3; i++)
-  {
-    delay(200);
-    tft.print(".");
-  }
-  delay(200);
-
-  // Phase 2: Component initialization (800-1600ms)
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextSize(1);
-  tft.setTextColor(ST77XX_GREEN);
-
-  String components[] = {"TFT Display", "SD Card", "RTC Module", "Servo Motors"};
-  for (int i = 0; i < 4; i++)
-  {
-    tft.setCursor(20, 40 + i * 20);
-    tft.print("[");
-    delay(50);
-    tft.print("OK");
-    delay(50);
-    tft.print("] ");
-    tft.print(components[i]);
-    delay(1000);
-  }
-
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextSize(2);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setCursor(80, 60);
-  tft.println("LOADING");
-
-  int barX = 40;
-  int barY = 100;
-  int barWidth = 200;
-  int barHeight = 20;
-
-  int spinnerX = (tft.width() / 2);
-  int spinnerY = barY + barHeight + 45;
-  int spinnerRadius = 15;
-
-  for (int progress = 0; progress <= 100; progress += 2)
-  {
-    drawLoadingBar(progress, barX, barY, barWidth, barHeight);
-    drawSpinner(spinnerX, spinnerY, spinnerRadius, progress * 18);
-
-    tft.fillRect(120, 130, 40, 16, ST77XX_BLACK);
-    tft.setTextSize(1);
-    tft.setTextColor(ST77XX_YELLOW);
-    tft.setCursor(120, 130);
-    tft.print(progress);
-    tft.print("%");
-
-    delay(24);
-  }
-
-  tft.fillScreen(ST77XX_BLACK);
+  
   tft.setTextSize(3);
   tft.setTextColor(ST77XX_WHITE);
-
-  String initText = "READY";
-  int charWidth = 6 * 3;
-  int textWidth = initText.length() * charWidth;
-  int x = (tft.width() - textWidth) / 2;
-  int y = (tft.height() - 30) / 2;
-
-  // Animated border
-  for (int i = 0; i < 5; i++)
-  {
-    uint16_t color = (i % 2 == 0) ? ST77XX_GREEN : ST77XX_BLACK;
-    tft.drawRect(x - 10, y - 10, textWidth + 20, 44, color);
-    delay(40);
-  }
-
-  tft.setCursor(x, y);
-  tft.println(initText);
-  delay(1000);
+  tft.setCursor(50, 100);
+  tft.println(F("MedDispenser"));
+  
+  tft.setTextSize(1);
+  tft.setCursor(80, 140);
+  tft.println(F("Initializing..."));
+  
+  delay(2000);
 }
 
-void groupMedicationsByTime()
-{
+void groupMedicationsByTime() {
   groupedCount = 0;
 
-  for (int i = 0; i < scheduleCount; i++)
-  {
-    String currentTime = schedules[i].time;
+  for (int i = 0; i < scheduleCount; i++) {
     int groupIndex = -1;
 
-    // Check if time already exists in grouped schedules
-    for (int j = 0; j < groupedCount; j++)
-    {
-      if (groupedSchedules[j].time == currentTime)
-      {
+    for (int j = 0; j < groupedCount; j++) {
+      if (strcmp(groupedSchedules[j].time, schedules[i].time) == 0) {
         groupIndex = j;
         break;
       }
     }
 
-    // If time doesn't exist, create new group
-    if (groupIndex == -1)
-    {
+    if (groupIndex == -1) {
       groupIndex = groupedCount;
-      groupedSchedules[groupIndex].time = currentTime;
+      strcpy(groupedSchedules[groupIndex].time, schedules[i].time); // Using strcpy
       groupedSchedules[groupIndex].count = 0;
       groupedCount++;
     }
 
-    // Add medication to the group
     int medIndex = groupedSchedules[groupIndex].count;
-    if (medIndex < 5)
-    { // Max 5 medications per time slot
-      groupedSchedules[groupIndex].medications[medIndex] = schedules[i].medication;
-      groupedSchedules[groupIndex].dosages[medIndex] = schedules[i].dosage;
-      groupedSchedules[groupIndex].tubes[medIndex] = schedules[i].tube;
+    if (medIndex < MAX_MEDS_PER_TIME) { // Using new constant
+      strcpy(groupedSchedules[groupIndex].medications[medIndex], schedules[i].medication);
+      strcpy(groupedSchedules[groupIndex].dosages[medIndex], schedules[i].dosage);
+      strcpy(groupedSchedules[groupIndex].tubes[medIndex], schedules[i].tube);
       groupedSchedules[groupIndex].amounts[medIndex] = schedules[i].amount;
       groupedSchedules[groupIndex].count++;
     }
   }
 }
 
-// ---------------- JSON Parsing Functions ----------------
-bool startStreamingSave()
-{
+bool startStreamingSave() {
   const char *tmpName = "data.tmp";
 
-  if (sdBusy)
-  {
-    Serial.println("startStreamingSave: SD busy, abort.");
+  if (sdBusy) {
+    Serial.println(F("startStreamingSave: SD busy, abort.")); // Using F() macro
     return false;
   }
   sdBusy = true;
 
-  // Make sure other SPI device (TFT) releases CS
   digitalWrite(TFT_CS, HIGH);
   delay(5);
-  if (!acquireSD())
-  {
-    Serial.println("SD.begin failed");
+  if (!acquireSD()) {
+    Serial.println(F("SD.begin failed")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
-  // Ensure SD initialized
-  if (!SD.begin(SD_CS))
-  {
-    Serial.println("startStreamingSave: SD.begin() failed.");
+  if (!SD.begin(SD_CS)) {
+    Serial.println(F("startStreamingSave: SD.begin() failed.")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
-  // remove stale temp
-  if (SD.exists(tmpName))
-  {
+  if (SD.exists(tmpName)) {
     SD.remove(tmpName);
     delay(100);
   }
 
-  // Open temp file for streaming writes
   streamingFile = SD.open(tmpName, O_WRITE | O_CREAT | O_TRUNC);
-  if (!streamingFile)
-  {
-    Serial.println("startStreamingSave: ERROR opening temp for write!");
+  if (!streamingFile) {
+    Serial.println(F("startStreamingSave: ERROR opening temp for write!")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
   streamingActive = true;
-  Serial.println("Started streaming save to SD");
+  Serial.println(F("Started streaming save to SD")); // Using F() macro
   return true;
 }
 
-bool writeStreamingChunk(const String &chunk)
-{
-  if (!streamingActive || !streamingFile)
-  {
+bool writeStreamingChunk(const String &chunk) {
+  if (!streamingActive || !streamingFile) {
     return false;
   }
 
   size_t written = streamingFile.print(chunk);
-  streamingFile.flush(); // Ensure data is written immediately
+  streamingFile.flush();
 
-  if (written != chunk.length())
-  {
-    Serial.println("writeStreamingChunk: ERROR incomplete write!");
+  if (written != chunk.length()) {
+    Serial.println(F("writeStreamingChunk: ERROR incomplete write!")); // Using F() macro
     return false;
   }
-
   return true;
 }
 
-bool finishStreamingSave()
-{
-  if (!streamingActive)
-  {
-    return false;
-  }
+bool finishStreamingSave() {
+  if (!streamingActive) return false;
 
   const char *tmpName = "data.tmp";
   const char *finalName = "data.json";
@@ -535,62 +366,49 @@ bool finishStreamingSave()
   streamingFile.sync();
   streamingFile.close();
   streamingActive = false;
-
   delay(50);
 
-  // Try to remove final (retry few times)
-  if (SD.exists(finalName))
-  {
+  if (SD.exists(finalName)) {
     bool removed = false;
-    for (int attempt = 0; attempt < 6; ++attempt)
-    {
+    for (int attempt = 0; attempt < 6; ++attempt) {
       delay(40);
       removed = SD.remove(finalName);
-      Serial.print("finishStreamingSave: remove final attempt ");
+      Serial.print(F("finishStreamingSave: remove final attempt ")); // Using F() macro
       Serial.print(attempt);
-      Serial.print(" -> ");
-      Serial.println(removed ? "ok" : "fail");
-      if (removed)
-        break;
+      Serial.print(F(" -> "));
+      Serial.println(removed ? F("ok") : F("fail"));
+      if (removed) break;
     }
   }
 
-  // Try rename
   bool renamed = SD.rename(tmpName, finalName);
-  Serial.print("finishStreamingSave: rename -> ");
-  Serial.println(renamed ? "ok" : "fail");
+  Serial.print(F("finishStreamingSave: rename -> ")); // Using F() macro
+  Serial.println(renamed ? F("ok") : F("fail"));
 
-  if (!renamed)
-  {
-    Serial.println("finishStreamingSave: fallback copy starting...");
-    // Fallback: stream copy from temp to final
+  if (!renamed) {
+    Serial.println(F("finishStreamingSave: fallback copy starting...")); // Using F() macro
     File r = SD.open(tmpName, FILE_READ);
-    if (!r)
-    {
-      Serial.println("finishStreamingSave: fallback: cannot open temp for read.");
+    if (!r) {
+      Serial.println(F("finishStreamingSave: fallback: cannot open temp for read.")); // Using F() macro
       sdBusy = false;
       return false;
     }
 
-    if (SD.exists(finalName))
-    {
+    if (SD.exists(finalName)) {
       SD.remove(finalName);
       delay(10);
     }
 
     File f2 = SD.open(finalName, O_WRITE | O_CREAT | O_TRUNC);
-    if (!f2)
-    {
-      Serial.println("finishStreamingSave: fallback: cannot open final for write.");
+    if (!f2) {
+      Serial.println(F("finishStreamingSave: fallback: cannot open final for write.")); // Using F() macro
       r.close();
       sdBusy = false;
       return false;
     }
 
-    // Stream copy in small chunks
-    char buffer[64];
-    while (r.available())
-    {
+    char buffer[32];
+    while (r.available()) {
       int bytesRead = r.readBytes(buffer, sizeof(buffer));
       f2.write((const uint8_t *)buffer, bytesRead);
     }
@@ -598,91 +416,71 @@ bool finishStreamingSave()
     f2.sync();
     f2.close();
     r.close();
-    f2.flush();
-    r.flush();
-    Serial.println("finishStreamingSave: fallback copy complete");
+    Serial.println(F("finishStreamingSave: fallback copy complete")); // Using F() macro
 
-    // Try remove temp (best-effort)
-    if (SD.exists(tmpName))
-    {
+    if (SD.exists(tmpName)) {
       SD.remove(tmpName);
     }
   }
 
   sdBusy = false;
-  Serial.println("Streaming save completed successfully");
+  Serial.println(F("Streaming save completed successfully")); // Using F() macro
   delay(500);
   return true;
 }
 
-// Convert time string to minutes since midnight
-int timeToMinutes(String timeStr)
-{
-  int colonIndex = timeStr.indexOf(':');
-  if (colonIndex == -1)
+int timeToMinutes(const char* timeStr) {
+  int hours, minutes;
+  if (sscanf(timeStr, "%d:%d", &hours, &minutes) != 2) {
     return -1;
-
-  int hours = timeStr.substring(0, colonIndex).toInt();
-  int minutes = timeStr.substring(colonIndex + 1).toInt();
+  }
   return hours * 60 + minutes;
 }
 
-// Modified to work with grouped medications
-int findNextMedication()
-{
+int findNextMedication() {
   int currentMinutes = rtctime.hour() * 60 + rtctime.minute();
   int closestIndex = -1;
-  int minDifference = 24 * 60; // Max difference is 24 hours
+  int minDifference = 24 * 60;
 
-  for (int i = 0; i < groupedCount; i++)
-  {
+  for (int i = 0; i < groupedCount; i++) {
     int scheduleMinutes = timeToMinutes(groupedSchedules[i].time);
-    if (scheduleMinutes == -1)
-      continue;
+    if (scheduleMinutes == -1) continue;
 
     int difference = scheduleMinutes - currentMinutes;
-    if (difference < 0)
-      difference += 24 * 60; // Next day
+    if (difference < 0) difference += 24 * 60;
 
-    if (difference < minDifference)
-    {
+    if (difference < minDifference) {
       minDifference = difference;
       closestIndex = i;
     }
   }
-
   return closestIndex;
 }
 
-// Modified to handle multiple medications at same time
-bool checkMedicationTime()
-{
-  String currentTime = "";
-  if (rtctime.hour() < 10)
-    currentTime += "0";
-  currentTime += String(rtctime.hour());
-  currentTime += ":";
-  if (rtctime.minute() < 10)
-    currentTime += "0";
-  currentTime += String(rtctime.minute());
+bool checkMedicationTime() {
+  char currentTime[6];
+  sprintf(currentTime, "%02d:%02d", rtctime.hour(), rtctime.minute());
 
-  for (int i = 0; i < groupedCount; i++)
-  {
-    if (groupedSchedules[i].time == currentTime)
-    {
-      // Build notification message for multiple medications
-      if (groupedSchedules[i].count == 1)
-      {
-        notificationMessage = "TIME TO TAKE: " + groupedSchedules[i].medications[0] + " - " + groupedSchedules[i].dosages[0];
-      }
-      else
-      {
-        notificationMessage = "TIME TO TAKE " + String(groupedSchedules[i].count) + " MEDS: ";
-        for (int j = 0; j < groupedSchedules[i].count; j++)
-        {
-          if (j > 0)
-            notificationMessage += " + ";
-          notificationMessage += groupedSchedules[i].medications[j] + " (" + groupedSchedules[i].dosages[j] + ")";
+  for (int i = 0; i < groupedCount; i++) {
+    if (strcmp(groupedSchedules[i].time, currentTime) == 0) { // Using strcmp
+      if (groupedSchedules[i].count == 1) {
+        snprintf(notificationMessage, sizeof(notificationMessage), 
+                "TIME TO TAKE: %s - %s", 
+                groupedSchedules[i].medications[0], 
+                groupedSchedules[i].dosages[0]);
+      } else {
+        snprintf(notificationMessage, sizeof(notificationMessage), 
+                "TIME TO TAKE %d MEDS: %s (%s)", 
+                groupedSchedules[i].count,
+                groupedSchedules[i].medications[0], 
+                groupedSchedules[i].dosages[0]);
+        
+        if (groupedSchedules[i].count > 1 && strlen(notificationMessage) < 150) {
+          char temp[50];
+          snprintf(temp, sizeof(temp), " + %s (%s)", 
+                  groupedSchedules[i].medications[1], 
+                  groupedSchedules[i].dosages[1]);
+          strncat(notificationMessage, temp, sizeof(notificationMessage) - strlen(notificationMessage) - 1);
         }
       }
       return true;
@@ -691,126 +489,119 @@ bool checkMedicationTime()
   return false;
 }
 
-bool loadScheduleData()
-{
+bool loadScheduleData() {
   if (sdBusy) {
-    Serial.println("loadScheduleData: SD busy, abort");
+    Serial.println(F("loadScheduleData: SD busy, abort")); // Using F() macro
     return false;
   }
   sdBusy = true;
 
-  // Make sure TFT releases SPI and SD is (re)initialized
   digitalWrite(TFT_CS, HIGH);
   delayMicroseconds(5);
   if (!acquireSD()) {
-    Serial.println("loadScheduleData: SD.begin failed");
+    Serial.println(F("loadScheduleData: SD.begin failed")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
   File f = SD.open("data.json", FILE_READ);
   if (!f) {
-    Serial.println("Cannot find data.json");
+    Serial.println(F("Cannot find data.json")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
   size_t fileSize = f.size();
-  Serial.print("loadScheduleData: fileSize = ");
+  Serial.print(F("loadScheduleData: fileSize = ")); // Using F() macro
   Serial.println(fileSize);
   if (fileSize == 0) {
-    Serial.println("loadScheduleData: file empty");
+    Serial.println(F("loadScheduleData: file empty")); // Using F() macro
     f.close();
     sdBusy = false;
     return false;
   }
 
-  // ----- Use a FILTER to reduce memory needs -----
-  // filter[0] acts as a prototype for each element in the top-level array
-  StaticJsonDocument<256> filter;
+  StaticJsonDocument<128> filter;
   filter[0]["tube"] = true;
   filter[0]["type"] = true;
   filter[0]["amount"] = true;
-  filter[0]["time_to_take"][0]["time"] = true;     // applies to all time_to_take items
+  filter[0]["time_to_take"][0]["time"] = true;
   filter[0]["time_to_take"][0]["dosage"] = true;
 
-  // Parse the entire JSON array directly from the file using a small buffered stream
   scheduleCount = 0;
 
-  // With filtering, a much smaller capacity is enough
-  StaticJsonDocument<2048> doc;
-  ReadBufferingStream in(f, 64);
+  StaticJsonDocument<1024> doc;
+  ReadBufferingStream in(f, 32); // Reduced buffer size from 64 to 32
   DeserializationError err = deserializeJson(doc, in, DeserializationOption::Filter(filter));
 
   f.close();
 
   if (err) {
-    Serial.print("JSON parse error: ");
+    Serial.print(F("JSON parse error: ")); // Using F() macro
     Serial.println(err.c_str());
     sdBusy = false;
     return false;
   }
 
   if (!doc.is<JsonArray>()) {
-    Serial.println("JSON root is not an array");
+    Serial.println(F("JSON root is not an array")); // Using F() macro
     sdBusy = false;
     return false;
   }
 
   JsonArray arr = doc.as<JsonArray>();
   for (JsonObject med : arr) {
-    const char* tubeC  = med["tube"]  | "";
-    const char* typeC  = med["type"]  | "";
-    int amount         = med["amount"] | 0;
+    const char* tubeC = med["tube"] | "";
+    const char* typeC = med["type"] | "";
+    int amount = med["amount"] | 0;
 
     JsonArray times = med["time_to_take"].as<JsonArray>();
     if (times.isNull()) continue;
 
     for (JsonObject t : times) {
-      if (scheduleCount >= 10) break;   // protect array bounds
-      const char* timeC   = t["time"]   | "";
+      if (scheduleCount >= MAX_SCHEDULES) break; // Using new constant
+      const char* timeC = t["time"] | "";
       const char* dosageC = t["dosage"] | "";
 
-      schedules[scheduleCount].tube       = String(tubeC);
-      schedules[scheduleCount].medication = String(typeC);
-      schedules[scheduleCount].amount     = amount;
-      schedules[scheduleCount].time       = String(timeC);
-      schedules[scheduleCount].dosage     = String(dosageC);
+      strncpy(schedules[scheduleCount].tube, tubeC, sizeof(schedules[scheduleCount].tube) - 1);
+      schedules[scheduleCount].tube[sizeof(schedules[scheduleCount].tube) - 1] = '\0';
+      
+      strncpy(schedules[scheduleCount].medication, typeC, sizeof(schedules[scheduleCount].medication) - 1);
+      schedules[scheduleCount].medication[sizeof(schedules[scheduleCount].medication) - 1] = '\0';
+      
+      schedules[scheduleCount].amount = amount;
+      
+      strncpy(schedules[scheduleCount].time, timeC, sizeof(schedules[scheduleCount].time) - 1);
+      schedules[scheduleCount].time[sizeof(schedules[scheduleCount].time) - 1] = '\0';
+      
+      strncpy(schedules[scheduleCount].dosage, dosageC, sizeof(schedules[scheduleCount].dosage) - 1);
+      schedules[scheduleCount].dosage[sizeof(schedules[scheduleCount].dosage) - 1] = '\0';
+      
       scheduleCount++;
     }
   }
 
   sdBusy = false;
-
   groupMedicationsByTime();
-  Serial.print("Loaded ");
+  Serial.print(F("Loaded ")); // Using F() macro
   Serial.print(scheduleCount);
-  Serial.println(" medication schedules");
+  Serial.println(F(" medication schedules"));
 
   return scheduleCount > 0;
 }
 
-// Helper function to find matching brace
-
-// ---------------- Display Functions ----------------
-void drawHeader()
-{
-  // Header background
+void drawHeader() {
   tft.fillRect(0, 0, 320, 35, ST77XX_BLUE);
 
-  // Current time
   tft.setTextSize(2);
   tft.setTextColor(ST77XX_WHITE);
   tft.setCursor(10, 8);
-  if (rtctime.hour() < 10)
-    tft.print("0");
+  if (rtctime.hour() < 10) tft.print("0");
   tft.print(rtctime.hour());
   tft.print(":");
-  if (rtctime.minute() < 10)
-    tft.print("0");
+  if (rtctime.minute() < 10) tft.print("0");
   tft.print(rtctime.minute());
 
-  // Date
   tft.setTextSize(1);
   tft.setCursor(10, 22);
   tft.print(rtctime.day());
@@ -819,312 +610,253 @@ void drawHeader()
   tft.print("/");
   tft.print(rtctime.year());
 
-  // Status indicator
   tft.setTextSize(1);
   tft.setCursor(200, 8);
-  tft.print("STATUS: ");
+  tft.print(F("STATUS: ")); // Using F() macro
   tft.setTextColor(filestat ? ST77XX_GREEN : ST77XX_RED);
-  tft.print(filestat ? "READY" : "ERROR");
+  tft.print(filestat ? F("READY") : F("ERROR")); // Using F() macro
 
-  // Battery/connection indicator (decorative)
   tft.fillRect(290, 8, 20, 12, ST77XX_GREEN);
   tft.drawRect(289, 7, 22, 14, ST77XX_WHITE);
   tft.fillRect(311, 10, 3, 8, ST77XX_WHITE);
 }
 
-// Modified to display grouped medications
-void drawGroupedMedicationCard(int x, int y, int width, int height, GroupedMedication group, bool isNext = false)
-{
-  // Card background
+void drawGroupedMedicationCard(int x, int y, int width, int height, GroupedMedication group, bool isNext = false) {
   uint16_t cardColor = isNext ? ST77XX_YELLOW : ST77XX_WHITE;
   uint16_t textColor = isNext ? ST77XX_BLACK : ST77XX_BLACK;
 
   tft.fillRoundRect(x, y, width, height, 8, cardColor);
   tft.drawRoundRect(x, y, width, height, 8, isNext ? ST77XX_RED : ST77XX_BLUE);
 
-  // Time (larger, prominent)
   tft.setTextSize(2);
   tft.setTextColor(textColor);
   tft.setCursor(x + 8, y + 8);
   tft.print(group.time);
 
-  // Medication count indicator
-  if (group.count > 1)
-  {
+  if (group.count > 1) {
     tft.setTextSize(1);
     tft.setTextColor(ST77XX_RED);
     tft.setCursor(x + width - 50, y + 8);
     tft.print(group.count);
-    tft.print(" MEDS");
+    tft.print(F(" MEDS")); // Using F() macro
   }
 
-  // Show first medication prominently
   tft.setTextSize(1);
   tft.setTextColor(textColor);
   tft.setCursor(x + 8, y + 32);
   tft.print(group.medications[0]);
-  tft.print(" - ");
+  tft.print(F(" - ")); // Using F() macro
   tft.print(group.dosages[0]);
 
-  // Show second medication if exists
-  if (group.count > 1)
-  {
+  if (group.count > 1) {
     tft.setCursor(x + 8, y + 45);
     tft.print(group.medications[1]);
-    tft.print(" - ");
+    tft.print(F(" - ")); // Using F() macro
     tft.print(group.dosages[1]);
   }
 
-  // Show "+X more" if more than 2 medications
-  if (group.count > 2)
-  {
+  if (group.count > 2) {
     tft.setCursor(x + 8, y + 58);
-    tft.print("+ ");
+    tft.print(F("+ ")); // Using F() macro
     tft.print(group.count - 2);
-    tft.print(" more medications");
-  }
-  else if (group.count <= 2)
-  {
-    // Show tube info for single/double medications
+    tft.print(F(" more medications")); // Using F() macro
+  } else if (group.count <= 2) {
     tft.setCursor(x + 8, y + 58);
     tft.print(group.tubes[0]);
-    if (group.count == 2)
-    {
-      tft.print(", ");
+    if (group.count == 2) {
+      tft.print(F(", ")); // Using F() macro
       tft.print(group.tubes[1]);
     }
   }
 
-  // Next indicator
-  if (isNext)
-  {
+  if (isNext) {
     tft.setTextSize(1);
     tft.setTextColor(ST77XX_RED);
     tft.setCursor(x + width - 35, y + height - 15);
-    tft.print("NEXT");
+    tft.print(F("NEXT")); // Using F() macro
   }
 }
 
-// Enhanced notification display for multiple medications
-void drawNotification()
-{
-  if (!showNotification)
-    return;
+void drawNotification() {
+  if (!showNotification) return;
 
-  // Calculate notification height based on message length
   int notifHeight = 80;
-  if (notificationMessage.length() > 50)
-  {
+  if (strlen(notificationMessage) > 50) {
     notifHeight = 100;
   }
 
-  // Notification background
   tft.fillRect(10, 80, 300, notifHeight, ST77XX_RED);
   tft.drawRect(9, 79, 302, notifHeight + 2, ST77XX_WHITE);
 
-  // Blinking effect
   bool blink = (millis() / 500) % 2;
   uint16_t textColor = blink ? ST77XX_WHITE : ST77XX_YELLOW;
 
   tft.setTextSize(1);
   tft.setTextColor(textColor);
   tft.setCursor(15, 90);
-  tft.print("MEDICATION ALERT!");
+  tft.print(F("MEDICATION ALERT!")); // Using F() macro
 
-  // Split long messages across multiple lines
   tft.setTextSize(1);
   int lineY = 105;
   int charsPerLine = 35;
-  String msg = notificationMessage;
-
-  while (msg.length() > 0 && lineY < 80 + notifHeight - 20)
-  {
-    String line = msg.substring(0, min((int)msg.length(), charsPerLine));
-
-    // Try to break at word boundary
-    if (msg.length() > charsPerLine)
-    {
-      int lastSpace = line.lastIndexOf(' ');
-      if (lastSpace > 0)
-      {
-        line = msg.substring(0, lastSpace);
+  
+  int msgLen = strlen(notificationMessage);
+  int pos = 0;
+  
+  while (pos < msgLen && lineY < 80 + notifHeight - 20) {
+    int lineEnd = pos + charsPerLine;
+    if (lineEnd > msgLen) lineEnd = msgLen;
+    
+    if (lineEnd < msgLen) {
+      while (lineEnd > pos && notificationMessage[lineEnd] != ' ') {
+        lineEnd--;
       }
+      if (lineEnd == pos) lineEnd = pos + charsPerLine;
     }
-
+    
     tft.setCursor(15, lineY);
-    tft.print(line);
-
-    msg = msg.substring(line.length());
-    if (msg.startsWith(" "))
-      msg = msg.substring(1); // Remove leading space
+    for (int i = pos; i < lineEnd; i++) {
+      tft.print(notificationMessage[i]);
+    }
+    
+    pos = lineEnd;
+    if (pos < msgLen && notificationMessage[pos] == ' ') pos++;
     lineY += 12;
   }
 
-  // Updated auto-dismiss to 5 minutes and added button instruction
   tft.setTextSize(1);
   tft.setCursor(15, 80 + notifHeight - 25);
-  tft.print("Press DROP button to dispense");
+  tft.print(F("Press DROP button to dispense")); // Using F() macro
 
   tft.setCursor(15, 80 + notifHeight - 15);
-  tft.print("Auto-dismiss in ");
+  tft.print(F("Auto-dismiss in ")); // Using F() macro
   tft.print(300 - (millis() - notificationStartTime) / 1000);
-  tft.print("s");
+  tft.print(F("s")); // Using F() macro
 
-  // Auto-dismiss after 5 minutes (300 seconds)
-  if (millis() - notificationStartTime > 300000)
-  {
+  if (millis() - notificationStartTime > 300000) {
     showNotification = false;
   }
 }
 
-void showMainMenu()
-{
+void showMainMenu() {
   tft.fillScreen(ST77XX_BLACK);
-
-  // Draw header
   drawHeader();
 
-  // Check for medication time notification
-  if (checkMedicationTime() && !showNotification)
-  {
+  if (checkMedicationTime() && !showNotification) {
     showNotification = true;
     notificationStartTime = millis();
   }
 
-  // Show notification if active
-  if (showNotification)
-  {
+  if (showNotification) {
     drawNotification();
     return;
   }
 
-  // Main content area starts at y=40
   int contentY = 40;
 
-  if (!filestat || groupedCount == 0)
-  {
-    // Error state
+  if (!filestat || groupedCount == 0) {
     tft.setTextSize(2);
     tft.setTextColor(ST77XX_RED);
     tft.setCursor(50, contentY + 50);
-    tft.print("NO SCHEDULE DATA");
+    tft.print(F("NO SCHEDULE DATA")); // Using F() macro
 
     tft.setTextSize(1);
     tft.setTextColor(ST77XX_WHITE);
     tft.setCursor(50, contentY + 80);
-    tft.print("Please load medication");
+    tft.print(F("Please load medication")); // Using F() macro
     tft.setCursor(50, contentY + 95);
-    tft.print("schedule via app");
+    tft.print(F("schedule via app")); // Using F() macro
     return;
   }
 
-  // Find next medication group
   int nextMedIndex = findNextMedication();
 
-  // Title
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(10, contentY + 5);
-  tft.print("MEDICATION SCHEDULE");
+  tft.print(F("MEDICATION SCHEDULE")); // Using F() macro
 
-  // Show next 3 medication groups
   int cardY = contentY + 25;
   int cardsShown = 0;
 
-  // Show next medication group first (highlighted)
-  if (nextMedIndex != -1)
-  {
+  if (nextMedIndex != -1) {
     drawGroupedMedicationCard(10, cardY, 300, 75, groupedSchedules[nextMedIndex], true);
     cardY += 85;
     cardsShown++;
   }
 
-  // Show other upcoming medication groups
-  for (int i = 0; i < groupedCount && cardsShown < 3; i++)
-  {
-    if (i != nextMedIndex)
-    {
+  for (int i = 0; i < groupedCount && cardsShown < 3; i++) {
+    if (i != nextMedIndex) {
       drawGroupedMedicationCard(10, cardY, 300, 75, groupedSchedules[i], false);
       cardY += 85;
       cardsShown++;
     }
   }
 
-  // Footer info
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_CYAN);
   tft.setCursor(10, 260);
-  tft.print("Total schedules: ");
+  tft.print(F("Total schedules: ")); // Using F() macro
   tft.print(groupedCount);
-  tft.print(" (");
+  tft.print(F(" (")); // Using F() macro
   tft.print(scheduleCount);
-  tft.print(" doses)");
+  tft.print(F(" doses)")); // Using F() macro
 
-  // System info
   tft.setCursor(200, 260);
-  tft.print("Auto-refresh: 5s");
+  tft.print(F("Auto-refresh: 5s")); // Using F() macro
 }
 
-bool checkJsonFile()
-{
+bool checkJsonFile() {
   File f = SD.open("data.json", FILE_READ);
-  if (!f)
-  {
-    Serial.println("Cannot find data.json");
+  if (!f) {
+    Serial.println(F("Cannot find data.json")); // Using F() macro
     return false;
-  };
+  }
 
   String jsonStr;
-  while (f.available())
-    jsonStr += (char)f.read();
+  while (f.available()) jsonStr += (char)f.read();
   f.close();
-  f.flush();
 
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<512> doc;
   DeserializationError err = deserializeJson(doc, jsonStr);
 
-  if (err)
-  {
-    Serial.print("JSON syntax error: ");
+  if (err) {
+    Serial.print(F("JSON syntax error: ")); // Using F() macro
     Serial.println(err.c_str());
     return false;
   }
 
-  Serial.println("JSON is valid!");
+  Serial.println(F("JSON is valid!")); // Using F() macro
   return true;
 }
 
-bool initSD()
-{
+bool initSD() {
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
   digitalWrite(SD_CS, LOW);
   digitalWrite(TFT_CS, HIGH);
   delay(50);
 
-  for (int i = 0; i < 5; i++)
-  {
-    if (SD.begin(SD_CS))
-    {
-      Serial.println("SD initialized.");
+  for (int i = 0; i < 5; i++) {
+    if (SD.begin(SD_CS)) {
+      Serial.println(F("SD initialized.")); // Using F() macro
       delay(10);
       return true;
     }
-    Serial.println("SD init failed, retrying...");
+    Serial.println(F("SD init failed, retrying...")); // Using F() macro
     delay(200);
   }
   return false;
 }
 
-void setup()
-{
+void setup() {
   Serial.begin(9600);
   Serial1.begin(9600);
 
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
-
   pinMode(DROP_BTN, INPUT_PULLUP);
+  
   SPI.begin();
   digitalWrite(SD_CS, HIGH);
   digitalWrite(TFT_CS, HIGH);
@@ -1148,35 +880,28 @@ void setup()
   pinMode(MOTOR_4, OUTPUT);
   delay(200);
 
-  if (!initSD())
-  {
-    Serial.println("Cannot initialize SD card!");
-    while (1)
-      ;
+  if (!initSD()) {
+    Serial.println(F("Cannot initialize SD card!")); // Using F() macro
+    while (1);
   }
 
-  Serial.println("SD card ready.");
+  Serial.println(F("SD card ready.")); // Using F() macro
   filestat = loadScheduleData();
 
-  if (!rtc.begin())
-  {
-    Serial.println("RTC not found!");
+  if (!rtc.begin()) {
+    Serial.println(F("RTC not found!")); // Using F() macro
   }
   rtc.adjust(DateTime(2025, 8, 15, 18, 59, 0));
   showMainMenu();
 }
 
-void loop()
-{
+void loop() {
   delay(100);
   rtctime = rtc.now();
 
-  // Button handling
-  if (showNotification && digitalRead(DROP_BTN) == LOW)
-  {
-    delay(50); // Debounce
-    if (digitalRead(DROP_BTN) == LOW)
-    {
+  if (showNotification && digitalRead(DROP_BTN) == LOW) {
+    delay(50);
+    if (digitalRead(DROP_BTN) == LOW) {
       handleDispensing();
       delay(500);
     }
@@ -1186,188 +911,143 @@ void loop()
   const unsigned long refreshInterval = 5000;
 
   static int byteCounter = 0;
-  static String tempChunk = ""; // Small temporary buffer for processing
+  static char tempBuffer[TEMP_BUFFER_SIZE + 1] = "";
+  static int bufferPos = 0;
 
-  while (Serial1.available())
-  {
+  while (Serial1.available()) {
     char c = Serial1.read();
-    tempChunk += c;
+    
+    if (bufferPos < TEMP_BUFFER_SIZE) {
+      tempBuffer[bufferPos++] = c;
+      tempBuffer[bufferPos] = '\0';
+    }
+    
     byteCounter++;
-
     lastByteTime = millis();
 
-    if (!receiving)
-    {
-      int startIndex = tempChunk.indexOf("#START#");
-      if (startIndex != -1)
-      {
-        // tft.fillScreen(ST77XX_BLACK);
-        // tft.setTextSize(3);
-        // tft.setTextColor(ST77XX_WHITE);
-
-        // String initText = "RECEIVING";
-        // int charWidth = 6 * 3;
-        // int textWidth = initText.length() * charWidth;
-        // int x = (tft.width() - textWidth) / 2;
-        // int y = (tft.height() - 30) / 2;
-
-        // for (int i = 0; i < 5; i++)
-        // {
-        //   uint16_t color = (i % 2 == 0) ? ST77XX_GREEN : ST77XX_BLACK;
-        //   tft.drawRect(x - 10, y - 10, textWidth + 20, 44, color);
-        //   delay(40);
-        // }
-
-        // tft.setCursor(x, y);
-        // tft.println(initText);
+    if (!receiving) {
+      char* startPos = strstr(tempBuffer, "#START#");
+      if (startPos != nullptr) {
         receiving = true;
         receiveStartTime = millis();
-        tempChunk = tempChunk.substring(startIndex + 7);
-
-        // Start streaming save
-        if (!startStreamingSave())
-        {
-          Serial.println("Failed to start streaming save");
-          receiving = false;
-          tempChunk = "";
-          tempChunk.reserve(0);
-          continue;
+        
+        int startOffset = startPos - tempBuffer + 7;
+        int remainingLen = bufferPos - startOffset;
+        if (remainingLen > 0) {
+          memmove(tempBuffer, tempBuffer + startOffset, remainingLen);
+          bufferPos = remainingLen;
+          tempBuffer[bufferPos] = '\0';
+        } else {
+          bufferPos = 0;
+          tempBuffer[0] = '\0';
         }
 
-        Serial.println("Started receiving JSON data...");
+        if (!startStreamingSave()) {
+          Serial.println(F("Failed to start streaming save")); // Using F() macro
+          receiving = false;
+          bufferPos = 0;
+          continue;
+        }
+        Serial.println(F("Started receiving JSON data...")); // Using F() macro
+      } else if (bufferPos >= TEMP_BUFFER_SIZE - 8) {
+        memmove(tempBuffer, tempBuffer + TEMP_BUFFER_SIZE - 16, 16);
+        bufferPos = 16;
+        tempBuffer[bufferPos] = '\0';
       }
-      else if (tempChunk.length() > 64)
-      {
-        tempChunk = tempChunk.substring(tempChunk.length() - 32); // Keep only recent data
-      }
-    }
-    else
-    {
-      int endIndex = tempChunk.indexOf("#END#");
-      if (endIndex != -1)
-      {
-        // Write final chunk (without #END#)
-        String finalChunk = tempChunk.substring(0, endIndex);
-        if (finalChunk.length() > 0)
-        {
+    } else {
+      char* endPos = strstr(tempBuffer, "#END#");
+      if (endPos != nullptr) {
+        int finalLen = endPos - tempBuffer;
+        if (finalLen > 0) {
+          tempBuffer[finalLen] = '\0';
+          String finalChunk = String(tempBuffer);
           writeStreamingChunk(finalChunk);
         }
 
-        // Finish streaming save
         bool saved = finishStreamingSave();
-        Serial.println("\nReceived complete JSON!");
+        Serial.println(F("\nReceived complete JSON!")); // Using F() macro
 
-        if (saved)
-        {
+        if (saved) {
           delay(2000);
           bool loaded = false;
-          for (int attempt = 1; attempt <= 3; attempt++) // try up to 3 times
-          {
+          for (int attempt = 1; attempt <= 3; attempt++) {
             loaded = loadScheduleData();
-            if (loaded)
-            {
-              Serial.print("Schedule loaded successfully after BT transfer (try ");
+            if (loaded) {
+              Serial.print(F("Schedule loaded successfully after BT transfer (try ")); // Using F() macro
               Serial.print(attempt);
-              Serial.println(").");
-              break; // stop retrying if it works
-            }
-            else
-            {
-              Serial.print("Schedule load failed after BT transfer (try ");
+              Serial.println(F(").")); // Using F() macro
+              break;
+            } else {
+              Serial.print(F("Schedule load failed after BT transfer (try ")); // Using F() macro
               Serial.print(attempt);
-              Serial.println("). Retrying...");
-              delay(500); // short pause before retry
+              Serial.println(F("). Retrying...")); // Using F() macro
+              delay(500);
             }
           }
           filestat = loaded;
-
-          Serial.println(loaded ? "Schedule loaded successfully after BT transfer."
-                                : "Schedule load failed after BT transfer.");
           delay(2000);
-        }
-        else
-        {
+        } else {
           filestat = false;
-          Serial.println("Failed to save JSON to SD.");
+          Serial.println(F("Failed to save JSON to SD.")); // Using F() macro
         }
 
-        tempChunk = tempChunk.substring(endIndex + 5);
-        receiving = false;
-        Serial.println("Complete");
-        tempChunk = String();
-      }
-      else
-      {
-        // Write chunk to SD when we have enough data
-        if (tempChunk.length() >= 64)
-        {
-          String chunkToWrite = tempChunk.substring(0, 32);
-          writeStreamingChunk(chunkToWrite);
-          tempChunk = tempChunk.substring(32);
+        int endOffset = (endPos - tempBuffer) + 5;
+        int remainingLen = bufferPos - endOffset;
+        if (remainingLen > 0) {
+          memmove(tempBuffer, tempBuffer + endOffset, remainingLen);
+          bufferPos = remainingLen;
+          tempBuffer[bufferPos] = '\0';
+        } else {
+          bufferPos = 0;
+          tempBuffer[0] = '\0';
         }
-      } 
+        
+        receiving = false;
+        Serial.println(F("Complete")); // Using F() macro
+      } else {
+        if (bufferPos >= TEMP_BUFFER_SIZE - 8) {
+          String chunkToWrite = String(tempBuffer).substring(0, TEMP_BUFFER_SIZE / 2);
+          writeStreamingChunk(chunkToWrite);
+          
+          int keepLen = bufferPos - (TEMP_BUFFER_SIZE / 2);
+          memmove(tempBuffer, tempBuffer + (TEMP_BUFFER_SIZE / 2), keepLen);
+          bufferPos = keepLen;
+          tempBuffer[bufferPos] = '\0';
+        }
+      }
     }
 
-    if (byteCounter >= 32)
-    {
+    if (byteCounter >= 32) {
       Serial1.write('A');
       byteCounter = 0;
     }
-
-    // Prevent memory overflow
-    if (tempChunk.length() > 128)
-    {
-      if (receiving)
-      {
-        // Write excess to SD
-        String excess = tempChunk.substring(0, 64);
-        writeStreamingChunk(excess);
-        tempChunk = tempChunk.substring(64);
-      }
-      else
-      {
-        Serial.println("Warning: temp buffer too large, clearing!");
-        tempChunk = "";
-        tempChunk.reserve(0);
-      }
-    }
   }
 
-  // ---- Timeout checks ----
-  if (receiving)
-  {
-    // If no new byte in 5 seconds
-    if (millis() - lastByteTime > 5000)
-    {
-      Serial.println("Timeout: no new data, aborting streaming save.");
-      if (streamingActive)
-      {
+  if (receiving) {
+    if (millis() - lastByteTime > 5000) {
+      Serial.println(F("Timeout: no new data, aborting streaming save.")); // Using F() macro
+      if (streamingActive) {
         streamingFile.close();
         streamingActive = false;
         sdBusy = false;
       }
-      tempChunk = "";
-      tempChunk.reserve(0);
+      bufferPos = 0;
+      tempBuffer[0] = '\0';
       receiving = false;
-    }
-    // If total > 20 seconds
-    else if (millis() - receiveStartTime > 20000)
-    {
-      Serial.println("Timeout: transmission too long, aborting streaming save.");
-      if (streamingActive)
-      {
+    } else if (millis() - receiveStartTime > 20000) {
+      Serial.println(F("Timeout: transmission too long, aborting streaming save.")); // Using F() macro
+      if (streamingActive) {
         streamingFile.close();
         streamingActive = false;
         sdBusy = false;
       }
-      tempChunk = "";
-      tempChunk.reserve(0);
+      bufferPos = 0;
+      tempBuffer[0] = '\0';
       receiving = false;
     }
   }
 
-  if (!receiving && millis() - lastUpdate >= refreshInterval)
-  {
+  if (!receiving && millis() - lastUpdate >= refreshInterval) {
     showMainMenu();
     lastUpdate = millis();
   }

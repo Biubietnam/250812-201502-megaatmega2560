@@ -1,7 +1,7 @@
 [
     {
         "tube": "tube1",
-        "type": "Paracetamol123412",
+        "type": "Paracetamol",
         "amount": 120,
         "time_to_take": [
             {
