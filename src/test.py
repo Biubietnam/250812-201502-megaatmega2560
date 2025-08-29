@@ -29,6 +29,7 @@ class ResponsiveAutoPillDispenser:
         
         self.manual_medications = []
         self.current_med_schedules = []
+        self.formatted_manual_data = ""
         
         self.setup_responsive_ui()
         self.bind_resize_events()
@@ -57,7 +58,7 @@ class ResponsiveAutoPillDispenser:
         self.bind_mousewheel()
         
         # Create all sections in the scrollable frame
-        self.create_sections()
+        self.create_responsive_layout()
         
     def bind_mousewheel(self):
         """Bind mouse wheel scrolling"""
@@ -82,11 +83,8 @@ class ResponsiveAutoPillDispenser:
             
         self.main_canvas.bind('<Configure>', on_canvas_configure)
         
-    def create_sections(self):
-        """Create all UI sections with responsive design"""
-        # Add padding to scrollable frame
-        self.content_frame = ttk.Frame(self.scrollable_frame, padding=20)
-        self.content_frame.pack(fill="both", expand=True)
+    def create_responsive_layout(self):
+        """Create the main responsive layout"""
         
         # Header
         self.create_responsive_header()
@@ -100,6 +98,7 @@ class ResponsiveAutoPillDispenser:
         # Upload section
         self.create_responsive_upload()
         
+        # Manual input section
         self.create_manual_input_section()
         
         # Preview section (larger and properly scrollable)
@@ -113,10 +112,10 @@ class ResponsiveAutoPillDispenser:
         
         # Clear button section
         self.create_clear_section()
-        
+
     def create_responsive_header(self):
         """Create responsive header"""
-        header_frame = ttk.Frame(self.content_frame)
+        header_frame = ttk.Frame(self.scrollable_frame)
         header_frame.pack(fill="x", pady=(0, 20))
         
         # Title
@@ -167,7 +166,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_mode_selection(self):
         """Create responsive mode selection"""
         mode_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="📁 Input Method",
             padding=15,
             bootstyle="info"
@@ -214,7 +213,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_connection(self):
         """Create responsive connection section"""
         conn_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="🔌 Device Connection",
             padding=15,
             bootstyle="success"
@@ -257,7 +256,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_upload(self):
         """Create responsive upload section"""
         upload_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="📤 Medication Data Upload",
             padding=15,
             bootstyle="warning"
@@ -296,7 +295,7 @@ class ResponsiveAutoPillDispenser:
     def create_manual_input_section(self):
         """Create manual medication input section"""
         self.manual_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="✏️ Manual Medication Entry",
             padding=15,
             bootstyle="success"
@@ -465,7 +464,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_preview(self):
         """Create responsive and properly scrollable preview section"""
         preview_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="👁️ Medication Schedule Preview",
             padding=10,
             bootstyle="info"
@@ -513,7 +512,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_status(self):
         """Create responsive status section"""
         status_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="📊 Device Status",
             padding=15,
             bootstyle="secondary"
@@ -548,7 +547,7 @@ class ResponsiveAutoPillDispenser:
     def create_responsive_submit(self):
         """Create responsive submit section"""
         submit_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="🚀 Send Configuration",
             padding=20,
             bootstyle="danger"
@@ -601,7 +600,7 @@ class ResponsiveAutoPillDispenser:
     def create_clear_section(self):
         """Create clear/reset section"""
         clear_frame = ttk.LabelFrame(
-            self.content_frame,
+            self.scrollable_frame,
             text="🧹 Reset & Clear",
             padding=15,
             bootstyle="secondary"
@@ -797,10 +796,13 @@ class ResponsiveAutoPillDispenser:
         if not port:
             messagebox.showerror("Error", "Please select a COM port!")
             return
-            
-        if mode == "json" and not self.medication_data:
-            messagebox.showerror("Error", "Please upload medication data!")
+        
+        if mode == "json" and not self.medication_data and not self.manual_medications:
+            messagebox.showerror("Error", "Please upload medication data or add manual medications!")
             return
+        
+        if mode == "json" and not self.medication_data and self.manual_medications:
+            self.use_manual_data()
             
         # Confirmation
         if mode == "json":
@@ -821,7 +823,8 @@ class ResponsiveAutoPillDispenser:
         def submit_task():
             try:
                 if mode == "json":
-                    data = "#START#" + json.dumps(self.medication_data, indent=2) + "#END#"
+                    json_data = json.dumps(self.medication_data, indent=2)
+                    data = "#START#" + json_data + "#END#"
                 else:
                     data = self.qr_data
                     
@@ -829,8 +832,8 @@ class ResponsiveAutoPillDispenser:
                 steps = [
                     "🔍 Validating data...",
                     f"🔌 Connecting to {port}...",
-                    "📡 Transmitting...",
-                    "⚙️ Configuring...",
+                    "📡 Transmitting JSON data...",
+                    "⚙️ Configuring dispenser...",
                     "✅ Complete!"
                 ]
                 
@@ -845,12 +848,11 @@ class ResponsiveAutoPillDispenser:
                 
                 with serial.Serial(port, 9600, timeout=5) as ser:
                     time.sleep(2)  # Give Arduino time to initialize
-                    
                     for i in range(0, len(data_bytes), CHUNK_SIZE):
                         chunk_num = (i // CHUNK_SIZE) + 1
                         chunk_data = data_bytes[i:i+CHUNK_SIZE]
                         
-                        progress_text = f"📦 Sending chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
+                        progress_text = f"📦 Sending JSON chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
                         self.app.after(0, lambda t=progress_text: self.chunk_progress_label.configure(text=t))
                         
                         # Send chunk
@@ -866,10 +868,10 @@ class ResponsiveAutoPillDispenser:
                     ser.flush()
                     time.sleep(2) 
                 self.app.after(0, lambda: [
-                    self.show_notification("Successfully submitted to dispenser!", "success"),
-                    self.status_label.configure(text="✅ Submission successful", bootstyle="success"),
-                    self.chunk_progress_label.configure(text="📦 All chunks sent successfully"),
-                    messagebox.showinfo("Success", f"Data successfully sent to {port}!")
+                    self.show_notification("Successfully submitted JSON data to dispenser!", "success"),
+                    self.status_label.configure(text="✅ JSON submission successful", bootstyle="success"),
+                    self.chunk_progress_label.configure(text="📦 All JSON chunks sent successfully"),
+                    messagebox.showinfo("Success", f"Medication data successfully sent to {port}!")
                 ])
                 
             except Exception as e:
@@ -927,7 +929,7 @@ class ResponsiveAutoPillDispenser:
         }
         
         notification = ttk.Label(
-            self.content_frame,
+            self.scrollable_frame,
             text=f"{'✅' if type_=='success' else '❌' if type_=='error' else 'ℹ️'} {message}",
             font=("Segoe UI", 10, "bold"),
             bootstyle=colors.get(type_, "info")
@@ -948,7 +950,7 @@ class ResponsiveAutoPillDispenser:
             self.com_var.set(com_ports[0])
         else:
             self.com_var.set("")
-            
+
     def run(self):
         """Start the application"""
         self.app.mainloop()
@@ -1063,12 +1065,7 @@ class ResponsiveAutoPillDispenser:
         # Add medications
         for med in self.manual_medications:
             schedules_str = ", ".join([f"{s['time']} ({s['dosage']})" for s in med['time_to_take']])
-            self.manual_listbox.insert("", "end", values=(
-                med['tube'],
-                med['type'],
-                f"{med['amount']} tablets",
-                schedules_str
-            ))
+            self.manual_listbox.insert("", "end", values=(med['tube'], med['type'], f"{med['amount']} tablets", schedules_str))
             
     def remove_manual_medication(self):
         """Remove selected manual medication"""
@@ -1084,25 +1081,35 @@ class ResponsiveAutoPillDispenser:
         self.show_notification(f"Removed {removed_med['type']}", "info")
         
     def use_manual_data(self):
-        """Use manually entered data as medication data"""
+        """Use manual medication data as the main data source"""
         if not self.manual_medications:
-            messagebox.showerror("Error", "No manual medications added!")
+            messagebox.showwarning("Warning", "No manual medications added!")
             return
             
-        self.medication_data = self.manual_medications.copy()
+        self.medication_data = []
+        for med in self.manual_medications:
+            med_dict = {
+                "tube": med["tube"],
+                "type": med["type"], 
+                "amount": med["amount"],
+                "time_to_take": med["time_to_take"]
+            }
+            self.medication_data.append(med_dict)
         
-        # Update UI
-        total_medications = len(self.medication_data)
-        total_tubes = len(set(med['tube'] for med in self.medication_data))
-        total_schedules = sum(len(med['time_to_take']) for med in self.medication_data)
+        self.formatted_manual_data = json.dumps(self.medication_data, indent=2)
         
-        self.file_label.configure(text="📝 Manual Input Data")
-        self.summary_label.configure(text=f"{total_medications} meds | {total_tubes} tubes | {total_schedules} schedules")
+        # Update preview
+        self.update_preview()
         
-        # Display preview
+        # Switch to JSON mode for submission
+        self.upload_mode.set("json")
+        
+        messagebox.showinfo("Success", f"Manual data loaded! {len(self.manual_medications)} medications ready.")
+        
+    def update_preview(self):
+        """Update preview with manual data"""
         self.display_medication_preview(self.medication_data)
-        self.show_notification(f"Using {total_medications} manually entered medications", "success")
-    
+        
     def show_empty_preview(self):
         """Show empty preview state"""
         for widget in self.preview_content.winfo_children():

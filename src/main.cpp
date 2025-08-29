@@ -1173,6 +1173,7 @@ void loop() {
         
         receiving = false;
         Serial.println(F("Complete")); // Using F() macro
+        Serial1.write('A');
       } else {
         if (bufferPos >= TEMP_BUFFER_SIZE - 8) {
           String chunkToWrite = String(tempBuffer).substring(0, TEMP_BUFFER_SIZE / 2);
