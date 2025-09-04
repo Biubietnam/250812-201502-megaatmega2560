@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="en-us" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="WelcomeDlgTitle"           Value="Welcome to the MedsPrepBuilder Setup Wizard"/>
+  <String Id="WelcomeDlgDescription"     Value="This wizard will install MedsPrepBuilder on your computer. Click Next to continue or Cancel to exit."/>
+  <String Id="LicenseAgreementDlgTitle"  Value="License Agreement"/>
+  <String Id="LicenseAgreementDlgDescription" Value="Please review the license agreement before installing."/>
+  <String Id="InstallDirDlgTitle"        Value="Choose Install Location"/>
+  <String Id="InstallDirDlgDescription"  Value="Choose the folder in which to install MedsPrepBuilder."/>
+  <String Id="VerifyReadyDlgTitle"       Value="Ready to Install"/>
+  <String Id="VerifyReadyDlgDescription" Value="Click Install to begin installation."/>
+  <String Id="ExitDlgTitle"              Value="Installation Complete"/>
+  <String Id="ExitDlgDescription"        Value="The installation of MedsPrepBuilder has been completed successfully."/>
+</WixLocalization>

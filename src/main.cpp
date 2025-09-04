@@ -19,10 +19,10 @@
 #define DROP_BTN 30
 #define FSR_PIN A4
 
-#define MAX_SCHEDULES 12  // Increased from 6 to 12 to accommodate more tubes and schedules
-#define MAX_GROUPED 12    // Increased from 6 to 12 to match MAX_SCHEDULES
-#define MAX_MEDS_PER_TIME 3  // Reduced from 5
-#define TEMP_BUFFER_SIZE 64  // Fixed buffer size
+#define MAX_SCHEDULES 12 
+#define MAX_GROUPED 12  
+#define MAX_MEDS_PER_TIME 3 
+#define TEMP_BUFFER_SIZE 64 
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 RTC_DS3231 rtc;
@@ -62,26 +62,26 @@ TubeMapping tubeMappings[4] = {
 };
 
 struct MedicationTime {
-  char time[6];        // "HH:MM" format
-  char dosage[16];     // Fixed size for dosage
-  char medication[24]; // Fixed size for medication name
-  char tube[8];        // Fixed size for tube name
+  char time[6];   
+  char dosage[16]; 
+  char medication[24];
+  char tube[8];      
   int amount;
 };
 
-MedicationTime schedules[MAX_SCHEDULES]; // Increased array size
+MedicationTime schedules[MAX_SCHEDULES]; 
 int scheduleCount = 0;
 
 struct GroupedMedication {
-  char time[6];                           // "HH:MM" format
-  char medications[MAX_MEDS_PER_TIME][24]; // Fixed size arrays
+  char time[6];               
+  char medications[MAX_MEDS_PER_TIME][24];
   char dosages[MAX_MEDS_PER_TIME][16];
   char tubes[MAX_MEDS_PER_TIME][8];
   int amounts[MAX_MEDS_PER_TIME];
   int count;
 };
 
-GroupedMedication groupedSchedules[MAX_GROUPED]; // Increased array size
+GroupedMedication groupedSchedules[MAX_GROUPED];
 int groupedCount = 0;
 
 bool setupMode = false;
@@ -93,14 +93,14 @@ bool waitingForDropButton = false;
 static bool triggerSetupAfterBT = false;
 
 void openServo(Servo &servo, int standbyPos = 91, int openPos = 45) {
-  Serial.println(F("Opening servo")); // Using F() macro for flash storage
+  Serial.println(F("Opening servo"));
   servo.write(openPos);
   delay(600);
   servo.write(standbyPos);
 }
 
 void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135) {
-  Serial.println(F("Closing servo")); // Using F() macro
+  Serial.println(F("Closing servo"));
   servo.write(closePos);
   delay(600);
   servo.write(standbyPos);
@@ -108,11 +108,11 @@ void closeServo(Servo &servo, int standbyPos = 91, int closePos = 135) {
 
 void triggerMotor(int motorPin, bool turnOn) {
   if (turnOn) {
-    Serial.print(F("Starting motor on pin ")); // Using F() macro
+    Serial.print(F("Starting motor on pin "));
     Serial.println(motorPin);
     digitalWrite(motorPin, HIGH);
   } else {
-    Serial.print(F("Stopping motor on pin ")); // Using F() macro
+    Serial.print(F("Stopping motor on pin "));
     Serial.println(motorPin);
     digitalWrite(motorPin, LOW);
   }
@@ -1014,7 +1014,7 @@ bool initSD() {
 
 void setup() {
   Serial.begin(9600);
-  Serial1.begin(9600);
+  Serial1.begin(115200);
 
   pinMode(SD_CS, OUTPUT);
   pinMode(TFT_CS, OUTPUT);
@@ -1074,7 +1074,7 @@ void loop() {
   }
 
   static unsigned long lastUpdate = 0;
-  const unsigned long refreshInterval = 5000;
+  const unsigned long refreshInterval = 2000;
 
   static int byteCounter = 0;
   static char tempBuffer[TEMP_BUFFER_SIZE + 1] = "";
@@ -1082,7 +1082,7 @@ void loop() {
 
   while (Serial1.available()) {
     char c = Serial1.read();
-    
+    Serial.print(c);
     if (bufferPos < TEMP_BUFFER_SIZE) {
       tempBuffer[bufferPos++] = c;
       tempBuffer[bufferPos] = '\0';
@@ -1132,6 +1132,7 @@ void loop() {
 
         bool saved = finishStreamingSave();
         Serial.println(F("\nReceived complete JSON!")); // Using F() macro
+        Serial1.write('A');
 
         if (saved) {
           delay(2000);
@@ -1173,7 +1174,8 @@ void loop() {
         
         receiving = false;
         Serial.println(F("Complete")); // Using F() macro
-        Serial1.write('A');
+        delay(300);
+        // Serial1.write('MA');
       } else {
         if (bufferPos >= TEMP_BUFFER_SIZE - 8) {
           String chunkToWrite = String(tempBuffer).substring(0, TEMP_BUFFER_SIZE / 2);
@@ -1188,7 +1190,7 @@ void loop() {
     }
 
     if (byteCounter >= 32) {
-      Serial1.write('A');
+      // Serial1.write('A');
       byteCounter = 0;
     }
   }

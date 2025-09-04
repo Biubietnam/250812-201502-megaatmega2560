@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization Culture="vi-vn"
+                 xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="WelcomeDlgTitle"           Value="Chào mừng đến với Trình Cài Đặt MedsPrepBuilder"/>
+  <String Id="WelcomeDlgDescription"     Value="Trình hướng dẫn này sẽ cài đặt MedsPrepBuilder trên máy tính của bạn. Nhấn Tiếp theo để tiếp tục hoặc Hủy để thoát."/>
+  <String Id="LicenseAgreementDlgTitle"  Value="Thỏa Thuận Cấp Phép"/>
+  <String Id="LicenseAgreementDlgDescription" Value="Vui lòng xem kỹ thỏa thuận cấp phép trước khi cài đặt."/>
+  <String Id="InstallDirDlgTitle"        Value="Chọn Thư Mục Cài Đặt"/>
+  <String Id="InstallDirDlgDescription"  Value="Chọn thư mục nơi MedsPrepBuilder sẽ được cài đặt."/>
+  <String Id="VerifyReadyDlgTitle"       Value="Sẵn sàng Cài Đặt"/>
+  <String Id="VerifyReadyDlgDescription" Value="Nhấn Cài đặt để bắt đầu quá trình."/>
+  <String Id="ExitDlgTitle"              Value="Hoàn Tất Cài Đặt"/>
+  <String Id="ExitDlgDescription"        Value="Quá trình cài đặt MedsPrepBuilder đã hoàn tất thành công."/>
+</WixLocalization>

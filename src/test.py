@@ -1,16 +1,27 @@
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox
-import serial
-import serial.tools.list_ports
+import asyncio
+from bleak import BleakScanner, BleakClient
 import threading
 import os
 import time
 from tkinter import Canvas
 import math
 import json
+import tkinter as tk
 
-class ResponsiveAutoPillDispenser:
+try:
+    from bleak import BleakScanner, BleakClient
+    BLEAK_AVAILABLE = True
+except ImportError as e:
+    print(f"Bleak not available: {e}")
+    BLEAK_AVAILABLE = False
+except Exception as e:
+    print(f"BLE initialization error: {e}")
+    BLEAK_AVAILABLE = False
+
+class ResponsiveAutoPillDispenserApp:
     def __init__(self):
         # Initialize main window with responsive settings
         self.app = ttk.Window(themename="flatly")
@@ -20,7 +31,8 @@ class ResponsiveAutoPillDispenser:
         self.app.resizable(True, True)  # Allow resizing
         
         # Variables
-        self.com_var = ttk.StringVar()
+        self.ble_var = ttk.StringVar()
+        self.ble_devices = {}  # Store device name -> address mapping
         self.file_var = ttk.StringVar()
         self.upload_mode = ttk.StringVar(value="json")
         self.is_sending = False
@@ -211,47 +223,77 @@ class ResponsiveAutoPillDispenser:
         self.mode_desc.pack(pady=(10, 0))
         
     def create_responsive_connection(self):
-        """Create responsive connection section"""
+        """Create responsive connection section with BLE device list"""
         conn_frame = ttk.LabelFrame(
             self.scrollable_frame,
-            text="🔌 Device Connection",
+            text="🔗 Device Connection",
             padding=15,
-            bootstyle="success"
+            bootstyle="primary"
         )
-        conn_frame.pack(fill="x", pady=(0, 15))
+        conn_frame.pack(fill="x", padx=20, pady=(0, 20))
         
-        # Info
         ttk.Label(
             conn_frame,
-            text="Connect to your Auto Pill Dispenser device",
+            text="Connect to your pill dispenser via Bluetooth Low Energy",
             font=("Segoe UI", 10),
             bootstyle="secondary"
         ).pack(pady=(0, 10))
         
-        # Port selection frame
-        port_frame = ttk.Frame(conn_frame)
-        port_frame.pack(fill="x")
+        device_header_frame = ttk.Frame(conn_frame)
+        device_header_frame.pack(fill="x", pady=(0, 10))
         
-        ttk.Label(port_frame, text="🔗 COM Port:", font=("Segoe UI", 11, "bold")).pack(side="left")
-        
-        self.com_menu = ttk.Combobox(
-            port_frame,
-            textvariable=self.com_var,
-            state="readonly",
-            bootstyle="success",
-            width=20
-        )
-        self.com_menu.pack(side="left", padx=(10, 5), fill="x", expand=True)
+        ttk.Label(device_header_frame, text="📶 Available BLE Devices:", font=("Segoe UI", 11, "bold")).pack(side="left")
         
         self.refresh_btn = ttk.Button(
-            port_frame,
+            device_header_frame,
             text="🔍 Scan",
             bootstyle="info-outline",
-            command=self.refresh_ports
+            command=self.refresh_devices
         )
-        self.refresh_btn.pack(side="right", padx=(5, 0))
+        self.refresh_btn.pack(side="right")
         
-        self.refresh_com_ports()
+        # Create device list frame
+        list_frame = ttk.Frame(conn_frame)
+        list_frame.pack(fill="both", expand=True, pady=(0, 10))
+        
+        # Create Treeview for device list
+        columns = ("name", "address", "status")
+        self.device_tree = ttk.Treeview(
+            list_frame,
+            columns=columns,
+            show="headings",
+            height=6,
+            bootstyle="primary"
+        )
+        
+        # Configure columns
+        self.device_tree.heading("name", text="Device Name")
+        self.device_tree.heading("address", text="MAC Address")
+        self.device_tree.heading("status", text="Status")
+        
+        self.device_tree.column("name", width=200, minwidth=150)
+        self.device_tree.column("address", width=150, minwidth=120)
+        self.device_tree.column("status", width=100, minwidth=80)
+        
+        # Add scrollbar for device list
+        device_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.device_tree.yview)
+        self.device_tree.configure(yscrollcommand=device_scrollbar.set)
+        
+        self.device_tree.pack(side="left", fill="both", expand=True)
+        device_scrollbar.pack(side="right", fill="y")
+        
+        # Bind selection event
+        self.device_tree.bind("<<TreeviewSelect>>", self.on_device_select)
+        
+        # Selected device info
+        self.selected_device_var = tk.StringVar(value="No device selected")
+        selected_frame = ttk.Frame(conn_frame)
+        selected_frame.pack(fill="x")
+        
+        ttk.Label(selected_frame, text="Selected Device:", font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.Label(selected_frame, textvariable=self.selected_device_var, font=("Segoe UI", 10)).pack(side="left", padx=(10, 0))
+        
+        self.refresh_ble_devices()
         
     def create_responsive_upload(self):
         """Create responsive upload section"""
@@ -566,7 +608,7 @@ class ResponsiveAutoPillDispenser:
         ).pack(anchor="w")
         
         checklist_items = [
-            "🔌 Device connected via COM port",
+            "📶 Device connected via BLE",
             "📄 Medication data loaded and verified",
             "🏺 Dispenser is empty and ready",
             "⚠️ Safety protocols acknowledged"
@@ -653,16 +695,16 @@ class ResponsiveAutoPillDispenser:
             
         self.show_empty_preview()
     
-    def refresh_ports(self):
-        """Refresh COM ports with animation"""
+    def refresh_devices(self):
+        """Refresh BLE devices with animation"""
         self.refresh_btn.configure(text="🔄 Scanning...", state="disabled")
         
         def refresh_task():
             time.sleep(0.5)
-            self.refresh_com_ports()
+            self.refresh_ble_devices()
             self.app.after(0, lambda: [
                 self.refresh_btn.configure(text="🔍 Scan", state="normal"),
-                self.show_notification("Device scan completed!", "success")
+                self.show_notification("BLE device scan completed!", "success")
             ])
             
         threading.Thread(target=refresh_task, daemon=True).start()
@@ -789,27 +831,24 @@ class ResponsiveAutoPillDispenser:
                 ).pack(side="left")
                 
     def submit_data(self):
-        """Submit data to dispenser"""
-        port = self.com_var.get()
+        """Submit data to dispenser via BLE"""
+        device_name = self.ble_var.get()
         mode = self.upload_mode.get()
         
-        if not port:
-            messagebox.showerror("Error", "Please select a COM port!")
+        if not device_name:
+            messagebox.showerror("Error", "Please select a BLE device!")
             return
-        
-        if mode == "json" and not self.medication_data and not self.manual_medications:
-            messagebox.showerror("Error", "Please upload medication data or add manual medications!")
+            
+        if mode == "json" and not self.medication_data:
+            messagebox.showerror("Error", "Please upload medication data!")
             return
-        
-        if mode == "json" and not self.medication_data and self.manual_medications:
-            self.use_manual_data()
             
         # Confirmation
         if mode == "json":
             med_count = len(self.medication_data)
-            confirm_msg = f"Submit {med_count} medications via {port}?"
+            confirm_msg = f"Submit {med_count} medications via {device_name}?"
         else:
-            confirm_msg = f"Submit QR data via {port}?"
+            confirm_msg = f"Submit QR data via {device_name}?"
             
         if not messagebox.askyesno("Confirm", confirm_msg):
             return
@@ -823,17 +862,16 @@ class ResponsiveAutoPillDispenser:
         def submit_task():
             try:
                 if mode == "json":
-                    json_data = json.dumps(self.medication_data, indent=2)
-                    data = "#START#" + json_data + "#END#"
+                    data = "#START#" + json.dumps(self.medication_data, indent=2) + "#END#"
                 else:
                     data = self.qr_data
                     
                 # Simulate submission steps
                 steps = [
                     "🔍 Validating data...",
-                    f"🔌 Connecting to {port}...",
-                    "📡 Transmitting JSON data...",
-                    "⚙️ Configuring dispenser...",
+                    f"📶 Connecting to {device_name}...",
+                    "📡 Transmitting...",
+                    "⚙️ Configuring...",
                     "✅ Complete!"
                 ]
                 
@@ -841,37 +879,24 @@ class ResponsiveAutoPillDispenser:
                     time.sleep(0.8)
                     self.app.after(0, lambda s=step: self.status_label.configure(text=s))
                 
-                CHUNK_SIZE = 32
-                CHUNK_DELAY = 0.15  # Increased delay from 0.05 to 0.15 seconds for Arduino compatibility
+                CHUNK_SIZE = 20  # BLE typically has smaller MTU
+                CHUNK_DELAY = 0.2  # Slightly longer delay for BLE
                 data_bytes = data.encode('utf-8')
                 total_chunks = (len(data_bytes) + CHUNK_SIZE - 1) // CHUNK_SIZE
                 
-                with serial.Serial(port, 9600, timeout=5) as ser:
-                    time.sleep(2)  # Give Arduino time to initialize
-                    for i in range(0, len(data_bytes), CHUNK_SIZE):
-                        chunk_num = (i // CHUNK_SIZE) + 1
-                        chunk_data = data_bytes[i:i+CHUNK_SIZE]
-                        
-                        progress_text = f"📦 Sending JSON chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
-                        self.app.after(0, lambda t=progress_text: self.chunk_progress_label.configure(text=t))
-                        
-                        # Send chunk
-                        ser.write(chunk_data)
-                        ser.flush()
-                        
-                        time.sleep(CHUNK_DELAY)
-                        ack = ser.read(1)
-                        if ack != b'A':  # Assuming Arduino sends 'A' for acknowledgment
-                            raise Exception(f"Arduino did not acknowledge chunk {chunk_num}")
-                    
-                    time.sleep(0.5)
-                    ser.flush()
-                    time.sleep(2) 
+                # Get device address from stored mapping
+                device_address = self.ble_devices.get(device_name)
+                if not device_address:
+                    raise Exception(f"Device address not found for {device_name}")
+                
+                # Run BLE transmission in async context
+                asyncio.run(self.send_ble_data(device_address, data_bytes, CHUNK_SIZE, CHUNK_DELAY, total_chunks))
+                
                 self.app.after(0, lambda: [
-                    self.show_notification("Successfully submitted JSON data to dispenser!", "success"),
-                    self.status_label.configure(text="✅ JSON submission successful", bootstyle="success"),
-                    self.chunk_progress_label.configure(text="📦 All JSON chunks sent successfully"),
-                    messagebox.showinfo("Success", f"Medication data successfully sent to {port}!")
+                    self.show_notification("Successfully submitted to dispenser!", "success"),
+                    self.status_label.configure(text="✅ Submission successful", bootstyle="success"),
+                    self.chunk_progress_label.configure(text="📦 All chunks sent successfully"),
+                    messagebox.showinfo("Success", f"Data successfully sent to {device_name}!")
                 ])
                 
             except Exception as e:
@@ -885,7 +910,180 @@ class ResponsiveAutoPillDispenser:
                 self.app.after(0, self.reset_submit_button)
                 
         threading.Thread(target=submit_task, daemon=True).start()
+
+    async def send_ble_data(self, device_address, data_bytes, chunk_size, chunk_delay, total_chunks):
+        """Send data via BLE connection with improved error handling"""
+        if device_address.startswith("SIM:") or device_address == "00:00:00:00:00":
+            # Simulate BLE transmission
+            for i in range(0, len(data_bytes), chunk_size):
+                chunk_num = (i // chunk_size) + 1
+                chunk_data = data_bytes[i:i+chunk_size]
+                
+                progress_text = f"📦 Simulating chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
+                self.app.after(0, lambda t=progress_text: self.chunk_progress_label.configure(text=t))
+                
+                await asyncio.sleep(chunk_delay)
+            return
         
+        # Standard BLE service UUID for data transmission
+        SERVICE_UUID = "12345678-1234-1234-1234-123456789abc"
+        CHARACTERISTIC_UUID = "87654321-4321-4321-4321-cba987654321"
+        
+        try:
+            async with BleakClient(device_address, timeout=10.0) as client:
+                if not client.is_connected:
+                    raise Exception("Failed to connect to BLE device")
+                
+                await asyncio.sleep(1)  # Give device time to initialize
+                
+                for i in range(0, len(data_bytes), chunk_size):
+                    chunk_num = (i // chunk_size) + 1
+                    chunk_data = data_bytes[i:i+chunk_size]
+                    
+                    progress_text = f"📦 Sending chunk {chunk_num}/{total_chunks} ({len(chunk_data)} bytes)"
+                    self.app.after(0, lambda t=progress_text: self.chunk_progress_label.configure(text=t))
+                    
+                    # Send chunk via BLE characteristic
+                    await client.write_gatt_char(CHARACTERISTIC_UUID, chunk_data)
+                    await asyncio.sleep(chunk_delay)
+                
+                await asyncio.sleep(0.5)
+                
+        except Exception as e:
+            raise Exception(f"BLE transmission failed: {str(e)}")
+
+    def get_ble_devices(self):
+        """Get available BLE devices with improved error handling"""
+        if not BLEAK_AVAILABLE:
+            messagebox.showerror("BLE Error", "BLE library not available. Please install bleak: pip install bleak")
+            return {"Simulation Device": "00:00:00:00:00:00"}
+        
+        try:
+            if hasattr(asyncio, 'WindowsProactorEventLoopPolicy'):
+                # Use ProactorEventLoop on Windows for better BLE compatibility
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            
+            # Create new event loop to avoid conflicts
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                devices = loop.run_until_complete(self.scan_ble_devices())
+            finally:
+                loop.close()
+                
+            return devices if devices else {"No BLE devices found": "00:00:00:00:00:00"}
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"BLE scan error: {error_msg}")
+            
+            if "tp_basicsize" in error_msg or "WinRT" in error_msg:
+                messagebox.showwarning(
+                    "BLE Compatibility Issue", 
+                    "Windows BLE compatibility issue detected.\n\n"
+                    "Try these solutions:\n"
+                    "1. Update Python to latest version\n"
+                    "2. Reinstall bleak: pip uninstall bleak && pip install bleak\n"
+                    "3. Use simulation mode for testing\n\n"
+                    "Using simulation device for now."
+                )
+            else:
+                messagebox.showerror("BLE Error", f"BLE scan failed: {error_msg}")
+            
+            # Return simulation device as fallback
+            return {"Simulation Device (BLE Error)": "SIM:00:00:00:00:00"}
+    
+    def on_device_select(self, event):
+        """Handle device selection from list"""
+        selection = self.device_tree.selection()
+        if selection:
+            item = self.device_tree.item(selection[0])
+            device_name = item['values'][0]
+            device_address = item['values'][1]
+            self.selected_device_var.set(f"{device_name} ({device_address})")
+            
+            # Store selected device info
+            self.selected_ble_device = {
+                'name': device_name,
+                'address': device_address
+            }
+        else:
+            self.selected_device_var.set("No device selected")
+            self.selected_ble_device = None
+
+    def refresh_ble_devices(self):
+        """Refresh BLE devices list and populate the tree view"""
+        # Clear existing items
+        for item in self.device_tree.get_children():
+            self.device_tree.delete(item)
+            
+        self.ble_devices = self.get_ble_devices()
+        
+        for device_name, device_address in self.ble_devices.items():
+            # Determine status based on device type
+            if "Simulation" in device_name or "SIM:" in device_address:
+                status = "Simulation"
+            elif "No BLE devices" in device_name:
+                status = "Not Found"
+            else:
+                status = "Available"
+            
+            self.device_tree.insert("", "end", values=(device_name, device_address, status))
+        
+        # Auto-select first available device if any
+        children = self.device_tree.get_children()
+        if children:
+            self.device_tree.selection_set(children[0])
+            self.on_device_select(None)
+
+    async def scan_ble_devices(self):
+        """Async BLE device scanning with timeout and error handling"""
+        devices = {}
+        
+        try:
+            scanner = BleakScanner()
+            
+            # Use shorter timeout to avoid hanging
+            discovered_devices = await asyncio.wait_for(
+                scanner.discover(), 
+                timeout=10.0  # Increased timeout for better device discovery
+            )
+            
+            for device in discovered_devices:
+                device_name = device.name if device.name else f"Unknown Device"
+                if device.address:
+                    # Add RSSI info if available
+                    rssi_info = f" (RSSI: {device.rssi})" if hasattr(device, 'rssi') and device.rssi else ""
+                    full_name = f"{device_name}{rssi_info}"
+                    devices[full_name] = device.address
+            
+            # Add some example devices for testing if no real devices found
+            if not devices:
+                devices["No BLE devices found"] = "00:00:00:00:00:00"
+                        
+        except asyncio.TimeoutError:
+            print("BLE scan timeout - no devices found")
+            devices["Scan Timeout"] = "00:00:00:00:00:00"
+        except Exception as e:
+            print(f"BLE scan exception: {e}")
+            devices[f"Scan Error: {str(e)[:30]}..."] = "00:00:00:00:00:00"
+        
+        return devices
+
+    def send_to_device(self):
+        """Send configuration to selected BLE device"""
+        if not hasattr(self, 'selected_ble_device') or not self.selected_ble_device:
+            messagebox.showerror("Error", "Please select a BLE device from the list first!")
+            return
+            
+        selected_address = self.selected_ble_device['address']
+        selected_name = self.selected_ble_device['name']
+        
+        if not selected_address or selected_address == "00:00:00:00:00:00":
+            messagebox.showwarning("Warning", f"Cannot connect to {selected_name}. Please select a valid BLE device.")
+            return
+
     def reset_submit_button(self):
         """Reset submit button"""
         self.is_sending = False
@@ -912,7 +1110,7 @@ class ResponsiveAutoPillDispenser:
     def reset_app(self):
         """Reset entire application"""
         self.clear_data()
-        self.com_var.set("")
+        self.ble_var.set("")
         self.upload_mode.set("json")
         self.switch_mode("json")
         self.status_label.configure(text="✅ Ready for configuration", bootstyle="success")
@@ -936,20 +1134,6 @@ class ResponsiveAutoPillDispenser:
         )
         notification.pack(pady=5)
         self.app.after(3000, notification.destroy)
-        
-    def get_com_ports(self):
-        """Get available COM ports"""
-        ports = serial.tools.list_ports.comports()
-        return [port.device for port in ports]
-        
-    def refresh_com_ports(self):
-        """Refresh COM ports list"""
-        com_ports = self.get_com_ports()
-        self.com_menu["values"] = com_ports
-        if com_ports:
-            self.com_var.set(com_ports[0])
-        else:
-            self.com_var.set("")
 
     def run(self):
         """Start the application"""
@@ -1081,35 +1265,31 @@ class ResponsiveAutoPillDispenser:
         self.show_notification(f"Removed {removed_med['type']}", "info")
         
     def use_manual_data(self):
-        """Use manual medication data as the main data source"""
+        """Use manually entered data as medication data"""
         if not self.manual_medications:
-            messagebox.showwarning("Warning", "No manual medications added!")
+            messagebox.showerror("Error", "No manual medications added!")
             return
             
-        self.medication_data = []
-        for med in self.manual_medications:
-            med_dict = {
-                "tube": med["tube"],
-                "type": med["type"], 
-                "amount": med["amount"],
-                "time_to_take": med["time_to_take"]
-            }
-            self.medication_data.append(med_dict)
+        self.medication_data = self.manual_medications.copy()
         
-        self.formatted_manual_data = json.dumps(self.medication_data, indent=2)
+        # Format the data with the same structure as JSON submission
+        formatted_data = "#START#" + json.dumps(self.medication_data, indent=2) + "#END#"
         
-        # Update preview
-        self.update_preview()
+        # Store the formatted data for potential use
+        self.formatted_manual_data = formatted_data
         
-        # Switch to JSON mode for submission
-        self.upload_mode.set("json")
+        # Update UI
+        total_medications = len(self.medication_data)
+        total_tubes = len(set(med['tube'] for med in self.medication_data))
+        total_schedules = sum(len(med['time_to_take']) for med in self.medication_data)
         
-        messagebox.showinfo("Success", f"Manual data loaded! {len(self.manual_medications)} medications ready.")
+        self.file_label.configure(text="📝 Manual Input Data")
+        self.summary_label.configure(text=f"{total_medications} meds | {total_tubes} tubes | {total_schedules} schedules")
         
-    def update_preview(self):
-        """Update preview with manual data"""
+        # Display preview
         self.display_medication_preview(self.medication_data)
-        
+        self.show_notification(f"Using {total_medications} manually entered medications (formatted with #START# #END#)", "success")
+    
     def show_empty_preview(self):
         """Show empty preview state"""
         for widget in self.preview_content.winfo_children():
@@ -1123,6 +1303,7 @@ class ResponsiveAutoPillDispenser:
             justify="center"
         )
         empty_label.pack(expand=True, pady=50)
+        
 if __name__ == "__main__":
-    app = ResponsiveAutoPillDispenser()
+    app = ResponsiveAutoPillDispenserApp()
     app.run()

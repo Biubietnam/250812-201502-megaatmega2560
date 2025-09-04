@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="MedsPrepBuilder"
+           Manufacturer="Nguyen Dang"
+           Version="1.0.0"
+           UpgradeCode="d5e4f5a7-25e2-4a8d-a4ab-3bb6ac7753e2"
+           InstallerVersion="500"
+           Compressed="yes"
+           Scope="perMachine"
+           Codepage="65001">
+           
+
+    <!-- Instantiate the built-in InstallDir UI and bind it to INSTALLFOLDER -->
+<ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+<WixVariable Id="WixUIBannerBmp" Value="banner.bmp" />
+<WixVariable Id="WixUIDialogBmp" Value="dialog.bmp" />
+
+<!-- Point the built-in LicenseAgreement dialog to your RTF -->
+<WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate />
+
+    <!-- Main app feature (always installed). 
+         (Users cannot deselect features in WixUI_InstallDir.) -->
+    <Feature Id="MainApp" Title="MedsPrepBuilder Application" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+    </Feature>
+  </Package>
+
+  <!-- Installation folder under Program Files -->
+  <Fragment>
+    <!-- If you prefer the classic pattern, use DirectoryRef ProgramFilesFolder.
+         StandardDirectory is also OK in v4/6. -->
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="MedsPrepBuilder" />
+    </StandardDirectory>
+  </Fragment>
+
+  <!-- Application file -->
+  <Fragment>
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExe" Guid="2b8b3e5d-6f58-4e2b-8c3e-7a8f5b4d59a1">
+        <File Id="MainExeFile" Source="dist\main.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Start Menu shortcut (always installed with this UI set) -->
+  <Fragment>
+    <ComponentGroup Id="ShortcutComponents" Directory="ProgramMenuFolder">
+      <Component Id="AppShortcut" Guid="6a3f2a91-46d7-4ab3-9b5b-1f5b2e6d8d31">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="MedsPrepBuilder"
+                  Target="[INSTALLFOLDER]main.exe"
+                  Icon="AppIcon.ico" />
+        <RemoveFolder Id="RemoveShortcuts" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\MedsPrepBuilder" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+        <Component Id="UninstallShortcut" Guid="b8e08b84-8f44-4cde-a61f-25e39adf3e61">
+  <Shortcut Id="UninstallShortcut"
+            Name="Uninstall MedsPrepBuilder"
+            Target="[SystemFolder]msiexec.exe"
+            Arguments="/x [ProductCode]"
+            WorkingDirectory="SystemFolder" />
+  <RegistryValue Root="HKCU" Key="Software\MedsPrepBuilder" Name="uninstall" Type="integer" Value="1" KeyPath="yes"/>
+  </Component>
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- Uninstall shortcut INSIDE the app folder -->
+<Fragment>
+  <ComponentGroup Id="InAppShortcuts" Directory="INSTALLFOLDER">
+    <Component Id="UninstallLinkInAppDir" Guid="65f4004c-26db-498c-abbb-217fe63f86cd">
+      <Shortcut Id="UninstallInApp"
+                Name="Uninstall MedsPrepBuilder"
+                Target="[SystemFolder]msiexec.exe"
+                Arguments="/x [ProductCode]"
+                WorkingDirectory="SystemFolder" />
+      <!-- KeyPath to anchor the component -->
+      <RegistryValue Root="HKCU"
+                     Key="Software\MedsPrepBuilder"
+                     Name="uninstall_inapp"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes"/>
+    </Component>
+  </ComponentGroup>
+</Fragment>
+
+
+  <!-- Launch app after first install -->
+  <Fragment>
+    <CustomAction Id="LaunchApp"
+                  FileRef="MainExeFile"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApp" After="InstallFinalize" Condition="NOT Installed" />
+    </InstallExecuteSequence>
+  </Fragment>
+
+  <Fragment>
+    <Icon Id="AppIcon.ico" SourceFile="logo.ico" />
+  </Fragment>
+</Wix>

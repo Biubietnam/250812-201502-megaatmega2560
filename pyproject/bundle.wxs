@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+
+  <!-- Change name/manufacturer/version to match your app -->
+  <Bundle Name="MedsPrepBuilder"
+          Manufacturer="Nguyen Dang"
+          Version="1.0.0"
+          UpgradeCode="5a9d9c0e-7b6a-4e04-8af2-7b6f9a6d1a43">
+
+    <!-- Standard Burn UI (localized by WiX); you can theme later if you wish -->
+    <bal:WixStandardBootstrapperApplication />
+
+    <!-- Require Win10+ (optional) -->
+    <bal:Condition Message="MedsPrepBuilder requires Windows 10 or later.">VersionNT >= 1000</bal:Condition>
+
+    <!-- Chain: pick ONE MSI based on bundle UI language -->
+    <Chain>
+      <!-- Vietnamese when bundle UI language equals vi-VN -->
+      <MsiPackage Id="MSI_vi"
+                  SourceFile="MedsPrepBuilder.vi-vn.msi"
+                  InstallCondition="WixBundleUILanguage = 'vi-VN'" />
+
+      <!-- Fallback to English -->
+      <MsiPackage Id="MSI_en"
+                  SourceFile="MedsPrepBuilder.en-us.msi"
+                  InstallCondition="WixBundleUILanguage &lt;&gt; 'vi-VN'" />
+    </Chain>
+  </Bundle>
+</Wix>
